@@ -4,7 +4,7 @@ import linecache
 import subprocess
 import tempfile
 
-def get_patch_info_from_gerrit(name, projectName):
+def get_patch_info_from_gerrit(gerritName, projectName):
 
     def dump_patch_info(output, suffix='', prefix='tmp', dirn=None):
         tmpfile = tempfile.mkstemp(suffix, prefix, dirn)
@@ -14,21 +14,36 @@ def get_patch_info_from_gerrit(name, projectName):
 
         return tmpfile[1]
 
-    gerritobj = '%s@icggerrit.ir.intel.com' % name
+    gerritobj = '%s@icggerrit.ir.intel.com' % gerritName
     project = 'project:%s' % projectName
+    #cmd = ['ssh', '-p', '29418', 'gerrit', 'query','status:NEW',
+    #       'branch:sandbox/yocto_startup_1214', '--all-approvals']
     cmd = ['ssh', '-p', '29418', 'gerrit', 'query','status:NEW',
-           'branch:sandbox/yocto_startup_1214', '--all-approvals']
+           'branch:master', '--all-approvals']
     cmd.insert(1, gerritobj)
     cmd.insert(6, project)
 
-    popen = subprocess.Popen(subprocess.list2cmdline(cmd),
-            stdout=subprocess.PIPE, shell=True)
+    popen = subprocess.Popen(subprocess.list2cmdline(cmd), stdout=subprocess.PIPE, shell=True)
 
     output = popen.communicate()[0]
     if popen.returncode:
         raise
 
     return dump_patch_info(output)
+
+def cherry_pick(gerritName, projectName, refs):
+
+    gerritobj = 'ssh://%s@icggerrit.ir.intel.com:29418/%s' % (gerritName, projectName)
+#    cmd = 'git fetch %s %s && git cherry-pick FETCH_HEAD' % (gerritobj, refs)
+    cmd = 'git fetch %s %s && git checkout FETCH_HEAD' % (gerritobj, refs)
+
+    popen = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
+    output = popen.communicate()[0]
+
+    if popen.returncode:
+        print "The patch cherry pick fails: %s\n" % refs.split('/')[-2]
+        print output.stderr
+
 
 class Parse(object):
 
@@ -41,6 +56,7 @@ class Parse(object):
         self.project = None
         self.branch = None
         self.changeId = None
+        self.number = None
         self.approvals = []
 
     def __parse_approvals(self, num1, num2):
@@ -85,6 +101,7 @@ class Parse(object):
                         self.parents = patchSet_list[patchSet_list.index(y)+1].lstrip('[').rstrip(']')
                     if y.find("refs") != -1:
                         self.refs = y.split(':')[1].lstrip()
+                        self.number = self.refs.split('/')[-2]
                     if y.find("approvals:") != -1:
                         self.approvals = self.__parse_approvals(num1, num2)
 
@@ -151,21 +168,42 @@ def check_value(patchobj_list):
 
     return patchobj_list
 
-def find_parents(filtered, l=[]):
-    for i in filtered:
-        l.append(filtered[i])
-        if i.parents == filtered[filtered.index[i]+1].revision:
-            l.append(filtered[j])
-            find_parents(l)
-        else:
-            find_parents(l)
+def find_parents(patch_l, obj):
+    deps_l = [obj]
+    def get_patch_obj(patch_l, parent_str):
+        for i in patch_l:
+            if i.revision == parent_str:
+                return i
+        return None
+
+    while obj:
+        obj = get_patch_obj(patch_l, obj.parents)
+        if obj:
+            deps_l.append(obj)
+
+    return deps_l
+
+#    if obj.parents:
+#        parentobj = get_patch_obj(patch_l, obj.parents)
+#        if parentsobj:
+#            find_parents(parentsobj)
+#        else:
+#            return yield obj
+
+def bubble_sorted(f_list):
+    for j in xrange(len(f_list)-1,-1,-1):
+        for i in xrange(j):
+            if(f_list[i].number < f_list[i+1].number):
+                f_list[i],f_list[i+1] = f_list[i+1],f_list[i]
+    return f_list
 
 if __name__ == '__main__':
     patchObjs = []
     filtered =[]
     #tmpfile = get_patch_info_from_gerrit('jinjingx', 'vied-viedandr-libcamhal')
+    #print tmpfile
     #tmpfile = "/tmp/tmp1"
-    tmpfile = "/tmp/tmpXtmGbd"
+    tmpfile = "/tmp/tmpyFGEz3"
 
     change_cmd = ["awk", '/change /{print NR}']
     change_cmd.append(tmpfile)
@@ -189,3 +227,17 @@ if __name__ == '__main__':
         import ipdb;ipdb.set_trace()
         patchObjs = has_approval(patchObjs)
         filtered = check_value(patchObjs)
+
+    sorted_l = bubble_sorted(filtered)
+
+    all_deps = []
+    for i in sorted_l:
+        deps_list = find_parents(sorted_l, i)
+        all_deps.append(deps_list)
+        for j in deps_list:
+            sorted_l.remove(j)
+
+    for m in all_deps:
+        sorted_l = bubble_sorted(m)
+        cherry_pick(name, project, sorted_l[0].refs)
+
