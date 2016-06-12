@@ -1,10 +1,10 @@
 #!/usr/bin/python
-import os
-import linecache
-import subprocess
+from Parse import Parse
+import sys
 import tempfile
+import subprocess
 
-def get_patch_info_from_gerrit(gerritName, projectName):
+def get_patch_info_and_dump(gerritName, projectName):
 
     def dump_patch_info(output, suffix='', prefix='tmp', dirn=None):
         tmpfile = tempfile.mkstemp(suffix, prefix, dirn)
@@ -24,14 +24,15 @@ def get_patch_info_from_gerrit(gerritName, projectName):
     cmd.insert(6, project)
 
     popen = subprocess.Popen(subprocess.list2cmdline(cmd), stdout=subprocess.PIPE, shell=True)
+    popen.communicate()[0]
 
-    output = popen.communicate()[0]
     if popen.returncode:
-        raise
+        print "Get patches info from gerrit fail, please double check!"
+        sys.exit()
 
     return dump_patch_info(output)
 
-def cherry_pick(gerritName, projectName, refs):
+def check_out(gerritName, projectName, refs):
 
     gerritobj = 'ssh://%s@icggerrit.ir.intel.com:29418/%s' % (gerritName, projectName)
 #    cmd = 'git fetch %s %s && git cherry-pick FETCH_HEAD' % (gerritobj, refs)
@@ -43,92 +44,6 @@ def cherry_pick(gerritName, projectName, refs):
     if popen.returncode:
         print "The patch cherry pick fails: %s\n" % refs.split('/')[-2]
         print output.stderr
-
-class Parse(object):
-
-    def __init__(self, filename):
-        self.tmpfile = filename
-        self.url = None
-        self.refs = None
-        self.parents = None
-        self.revision = None
-        self.project = None
-        self.branch = None
-        self.changeId = None
-        self.number = None
-        self.approvals = []
-
-    def __parse_approvals(self, num1, num2):
-        approvals = []
-        approvals_cmd = ["awk", '/approvals:/{print NR}']
-        approvals_cmd.append(self.tmpfile)
-
-        approvals_linenum = subprocess.check_output(approvals_cmd)
-        approvals_linenum = approvals_linenum.splitlines()
-
-        def func(approvals_list):
-            approval = {}
-            for n in approvals_list:
-                if n.find("type") != -1:
-                    approval[n.split(':')[0]] = n.split(':')[1].lstrip()
-                if n.find("value") != -1:
-                    approval[n.split(':')[0]] = n.split(':')[1].lstrip()
-            return approval
-
-        for index, value in enumerate(approvals_linenum):
-            with open(self.tmpfile, 'r') as fd3:
-                if int(value) > num1 and int(value) < num2:
-                    if  value != approvals_linenum[-1]:
-                        approvals_list = [line.strip() for line in fd3.readlines()[int(index):int(approvals_linenum[index+1])]]
-                    else:
-                        approvals_list = [line.strip() for line in fd3.readlines()[int(index): num2]]
-                    approvals.append(func(approvals_list))
-        return approvals
-
-    def __parse_patchsets(self, num2):
-
-        patchSets_cmd = ["awk", '/patchSets:/{print NR}']
-        patchSets_cmd.append(self.tmpfile)
-        patchSets_linenum = subprocess.check_output(patchSets_cmd)
-        patchSets_linenum = patchSets_linenum.splitlines()
-
-        def func(patchSet_list, num1, num2):
-            for y in patchSet_list:
-                    if y.find("revision") != -1:
-                        self.revision = y.split(':')[1].lstrip()
-                    if y.find("parents") != -1 and patchSet_list[patchSet_list.index(y)+1].find("refs") == -1:
-                        self.parents = patchSet_list[patchSet_list.index(y)+1].lstrip('[').rstrip(']')
-                    if y.find("refs") != -1:
-                        self.refs = y.split(':')[1].lstrip()
-                        self.number = self.refs.split('/')[-2]
-                    if y.find("approvals:") != -1:
-                        self.approvals = self.__parse_approvals(num1, num2)
-
-
-        for index, value in enumerate(patchSets_linenum):
-            with open(self.tmpfile, 'r') as fd2:
-                if int(value) > num2:
-                    patchSet_list = [line.strip() for line in fd2.readlines()[int(patchSets_linenum[index-1]):num2]]
-                    func(patchSet_list, int(patchSets_linenum[index-1]), num2)
-                elif int(value) < num2 and value == patchSets_linenum[-1]:
-                    patchSet_list = [line.strip() for line in fd2.readlines()[int(value):num2]]
-                    func(patchSet_list, int(value), num2)
-
-    def _parse_changes(self, num1, num2):
-
-        with open(self.tmpfile, 'r') as fd:
-            change_line = linecache.getline(self.tmpfile, num1)
-            self.changeId = change_line.split(' ')[1]
-            patchlist = [line.strip() for line in fd.readlines()[num1:num2]]
-            for j in patchlist:
-                if j.find("project") != -1:
-                    self.project = j.split(':')[1].lstrip()
-                if j.find("branch") != -1:
-                    self.branch = j.split(':')[1].lstrip()
-                if j.find("url") != -1:
-                    self.url = ":".join(j.split(':')[1:]).lstrip()
-                if j.find("patchSet") != -1:
-                    self.__parse_patchsets(num2)
 
 def has_approval(patchobj_list):
     filtered_list = []
@@ -182,14 +97,14 @@ def find_parents(patch_l, obj):
 
     return deps_l
 
-def big_bubble_sorted(f_list):
+def big_bubble(f_list):
     for j in xrange(len(f_list)-1,-1,-1):
         for i in xrange(j):
             if(f_list[i].number < f_list[i+1].number):
                 f_list[i],f_list[i+1] = f_list[i+1],f_list[i]
     return f_list
 
-def small_bubble_sorted(f_list):
+def small_bubble(f_list):
     for j in xrange(len(f_list)-1,-1,-1):
         for i in xrange(j):
             if(f_list[i][0].number > f_list[i+1][0].number):
@@ -199,7 +114,7 @@ def small_bubble_sorted(f_list):
 if __name__ == '__main__':
     patchObjs = []
     filtered =[]
-    #tmpfile = get_patch_info_from_gerrit('jinjingx', 'vied-viedandr-libcamhal')
+    #tmpfile = get_patch_info_and_dump('jinjingx', 'vied-viedandr-libcamhal')
     #print tmpfile
     #tmpfile = "/tmp/tmp1"
     tmpfile = "/tmp/tmpyFGEz3"
@@ -227,7 +142,7 @@ if __name__ == '__main__':
         patchObjs = has_approval(patchObjs)
         filtered = check_value(patchObjs)
 
-    big_sorted_l = big_bubble_sorted(filtered)
+    big_sorted_l = big_bubble(filtered)
 
     all_deps = []
     while len(big_sorted_l) >= 1:
@@ -237,9 +152,9 @@ if __name__ == '__main__':
             for j in deps_list:
                 big_sorted_l.remove(j)
 
-    small_sorted_l = small_bubble_sorted(all_deps)
+    small_sorted_l = small_bubble(all_deps)
 
     for m in small_sorted_l:
         #cherry_pick(name, project, m[0][0].refs)
         import ipdb;ipdb.set_trace()
-        cherry_pick('jinjingx', 'vied-viedandr-libcamhal', m[0].refs)
+        check_out('jinjingx', 'vied-viedandr-libcamhal', m[0].refs)
