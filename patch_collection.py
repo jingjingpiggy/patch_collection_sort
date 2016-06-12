@@ -44,7 +44,6 @@ def cherry_pick(gerritName, projectName, refs):
         print "The patch cherry pick fails: %s\n" % refs.split('/')[-2]
         print output.stderr
 
-
 class Parse(object):
 
     def __init__(self, filename):
@@ -183,17 +182,17 @@ def find_parents(patch_l, obj):
 
     return deps_l
 
-#    if obj.parents:
-#        parentobj = get_patch_obj(patch_l, obj.parents)
-#        if parentsobj:
-#            find_parents(parentsobj)
-#        else:
-#            return yield obj
-
-def bubble_sorted(f_list):
+def big_bubble_sorted(f_list):
     for j in xrange(len(f_list)-1,-1,-1):
         for i in xrange(j):
             if(f_list[i].number < f_list[i+1].number):
+                f_list[i],f_list[i+1] = f_list[i+1],f_list[i]
+    return f_list
+
+def small_bubble_sorted(f_list):
+    for j in xrange(len(f_list)-1,-1,-1):
+        for i in xrange(j):
+            if(f_list[i][0].number > f_list[i+1][0].number):
                 f_list[i],f_list[i+1] = f_list[i+1],f_list[i]
     return f_list
 
@@ -224,20 +223,23 @@ if __name__ == '__main__':
         patchObjs.append(patchobj)
 
     if patchObjs:
-        import ipdb;ipdb.set_trace()
+        #import ipdb;ipdb.set_trace()
         patchObjs = has_approval(patchObjs)
         filtered = check_value(patchObjs)
 
-    sorted_l = bubble_sorted(filtered)
+    big_sorted_l = big_bubble_sorted(filtered)
 
     all_deps = []
-    for i in sorted_l:
-        deps_list = find_parents(sorted_l, i)
-        all_deps.append(deps_list)
-        for j in deps_list:
-            sorted_l.remove(j)
+    while len(big_sorted_l) >= 1:
+        for i in big_sorted_l:
+            deps_list = find_parents(big_sorted_l, i)
+            all_deps.append(deps_list)
+            for j in deps_list:
+                big_sorted_l.remove(j)
 
-    for m in all_deps:
-        sorted_l = bubble_sorted(m)
-        cherry_pick(name, project, sorted_l[0].refs)
+    small_sorted_l = small_bubble_sorted(all_deps)
 
+    for m in small_sorted_l:
+        #cherry_pick(name, project, m[0][0].refs)
+        import ipdb;ipdb.set_trace()
+        cherry_pick('jinjingx', 'vied-viedandr-libcamhal', m[0].refs)
