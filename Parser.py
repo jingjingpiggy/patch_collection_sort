@@ -26,11 +26,11 @@ class Parser(object):
 
         def func(approvals_list):
             approval = {}
-            for n in approvals_list:
-                if n.find("type") != -1:
-                    approval[n.split(':')[0]] = n.split(':')[1].lstrip()
-                if n.find("value") != -1:
-                    approval[n.split(':')[0]] = n.split(':')[1].lstrip()
+            for i in approvals_list:
+                if i.find("type") != -1:
+                    approval[i.split(':')[0]] = i.split(':')[1].lstrip()
+                if i.find("value") != -1:
+                    approval[i.split(':')[0]] = i.split(':')[1].lstrip()
             return approval
 
         for index, value in enumerate(approvals_linenum):
@@ -51,15 +51,15 @@ class Parser(object):
         patchSets_linenum = patchSets_linenum.splitlines()
 
         def func(patchSet_list, num1, num2):
-            for y in patchSet_list:
-                    if y.find("revision") != -1:
-                        self.revision = y.split(':')[1].lstrip()
-                    if y.find("parents") != -1 and patchSet_list[patchSet_list.index(y)+1].find("refs") == -1:
-                        self.parents = patchSet_list[patchSet_list.index(y)+1].lstrip('[').rstrip(']')
-                    if y.find("refs") != -1:
-                        self.refs = y.split(':')[1].lstrip()
+            for i in patchSet_list:
+                    if i.find("revision") != -1:
+                        self.revision = i.split(':')[1].lstrip()
+                    if i.find("parents") != -1 and patchSet_list[patchSet_list.index(i)+1].find("refs") == -1:
+                        self.parents = patchSet_list[patchSet_list.index(i)+1].lstrip('[').rstrip(']')
+                    if i.find("refs") != -1:
+                        self.refs = i.split(':')[1].lstrip()
                         self.number = self.refs.split('/')[-2]
-                    if y.find("approvals:") != -1:
+                    if i.find("approvals:") != -1:
                         self.approvals = self._parse_approvals(num1, num2)
 
 
@@ -78,12 +78,12 @@ class Parser(object):
             change_line = linecache.getline(self.tmpfile, num1)
             self.changeId = change_line.split(' ')[1]
             patchlist = [line.strip() for line in fd.readlines()[num1:num2]]
-            for j in patchlist:
-                if j.find("project") != -1:
-                    self.project = j.split(':')[1].lstrip()
-                if j.find("branch") != -1:
-                    self.branch = j.split(':')[1].lstrip()
-                if j.find("url") != -1:
-                    self.url = ":".join(j.split(':')[1:]).lstrip()
-                if j.find("patchSet") != -1:
+            for i in patchlist:
+                if i.find("project") != -1:
+                    self.project = i.split(':')[1].lstrip()
+                if i.find("branch") != -1:
+                    self.branch = i.split(':')[1].lstrip()
+                if i.find("url") != -1:
+                    self.url = ":".join(i.split(':')[1:]).lstrip()
+                if i.find("patchSet") != -1:
                     self._parse_patchsets(num2)

@@ -2,6 +2,7 @@
 from Parser import Parser
 import sys
 import tempfile
+import argparse
 import subprocess
 
 def get_patch_info_and_dump(gerritName, projectName):
@@ -23,26 +24,19 @@ def get_patch_info_and_dump(gerritName, projectName):
     cmd.insert(1, gerritobj)
     cmd.insert(6, project)
 
+    output = ''
     popen = subprocess.Popen(subprocess.list2cmdline(cmd), stdout=subprocess.PIPE, shell=True)
     output = popen.communicate()[0]
+
+    if not output:
+        print "No unmerged patches on master branch in %s project." % projectName
+        sys.exit()
 
     if popen.returncode:
         print "Get patches info from gerrit fail, please double check!"
         sys.exit()
 
     return dump(output)
-
-def cherry_pick(gerritName, projectName, refs):
-
-    gerritobj = 'ssh://%s@icggerrit.ir.intel.com:29418/%s' % (gerritName, projectName)
-    cmd = 'git fetch %s %s && git cherry-pick FETCH_HEAD' % (gerritobj, refs)
-
-    popen = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
-    popen.communicate()[0]
-
-    if popen.returncode:
-        print "The patch cherry pick fails: %s\n" % refs.split('/')[-2]
-        #print popen.stderr
 
 def has_approval(patchobj_list):
     filtered_list = []
@@ -93,7 +87,6 @@ def find_parents(patch_l, obj):
         obj = get_patch_obj(patch_l, obj.parents)
         if obj:
             deps_l.append(obj)
-
     return deps_l
 
 def big_bubble(f_list):
@@ -103,17 +96,60 @@ def big_bubble(f_list):
                 f_list[i],f_list[i+1] = f_list[i+1],f_list[i]
     return f_list
 
-def small_bubble(f_list):
-    for j in xrange(len(f_list)-1,-1,-1):
-        for i in xrange(j):
-            if(f_list[i].number > f_list[i+1].number):
-                f_list[i],f_list[i+1] = f_list[i+1],f_list[i]
-    return f_list
+def exclude_patches(all_l, num):
+
+    def find_deps(all_l, num):
+        for deps in all_l:
+            for patchobj in deps:
+                if patchobj.num == num:
+                    return deps, all_l.index(deps)
+        return None
+
+    deps_l, deps_l_index = find_deps(all_l, num)
+    if not deps_l:
+        for index, value in enumerate(deps_l):
+            if value == num:
+                if index != 0:
+                    new_deps_l = deps_l[:index]
+                    all_l.insert(int(deps_l_index), new_deps_l)
+                    all_l.remove(deps_l)
+                else:
+                    all_l.remove(deps_l)
+    else:
+        print "No patch %s found in dependencies list" % num
+    return all_l
+
+
+def cherry_pick(gerritName, projectName, refs):
+
+    gerritobj = 'ssh://%s@icggerrit.ir.intel.com:29418/%s' % (gerritName, projectName)
+    cmd = 'git fetch %s %s && git cherry-pick FETCH_HEAD' % (gerritobj, refs)
+
+    popen = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
+    popen.communicate()[0]
+
+    if popen.returncode:
+        print "The patch that cherry pick fails: %s\n" % refs.split('/')[-2]
+        #print popen.stderr
+        sys.exit()
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Patch collection and sorting')
+    parser.add_argument('-n', '--name', required=True, help='Username of gerrit')
+    parser.add_argument('-p', '--project', required=True, help='Project name')
+    parser.add_argument('-e', '--exclude', action='store_true', help='Number of patches to be excluded')
+    parser.add_argument('-P', '--priority', action='store_true', help='Boost the priority of patches')
+
+    return parser.parse_args()
 
 if __name__ == '__main__':
     patchObjs = []
     filtered =[]
-    #tmpfile = get_patch_info_and_dump('jinjingx', 'vied-viedandr-libcamhal')
+    args = parse_args()
+    if not args.name or not args.project:
+        print "The username of gerrit and project are necessary, please refer to help."
+        sys.exit()
+    tmpfile = get_patch_info_and_dump(args.name, args.project)
     #print tmpfile
     #tmpfile = "/tmp/tmp1"
     tmpfile = "/tmp/tmpaHh3lV"
@@ -141,7 +177,6 @@ if __name__ == '__main__':
         patchObjs = has_approval(patchObjs)
         filtered = check_value(patchObjs)
 
-    import ipdb;ipdb.set_trace()
     big_sorted_l = big_bubble(filtered)
 
     all_deps = []
@@ -151,10 +186,13 @@ if __name__ == '__main__':
         for j in deps_list:
             big_sorted_l.remove(j)
 
+    if args.exclude:
+        all_deps = exclude_patches(all_deps, args.exclude)
+
     all_deps.reverse()
 
-    for m in all_deps:
-        n = small_bubble(m)
-        import ipdb;ipdb.set_trace()
-        for x in n:
-            cherry_pick('jinjingx', 'vied-viedandr-libcamhal', x.refs)
+    for deps in all_deps:
+        deps.reverse()
+        #import ipdb;ipdb.set_trace()
+        for i in deps:
+            cherry_pick(args.name, args.projct, i.refs)
