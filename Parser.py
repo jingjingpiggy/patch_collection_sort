@@ -2,7 +2,7 @@
 import linecache
 import subprocess
 
-class Parse(object):
+class Parser(object):
 
     def __init__(self, filename):
         self.tmpfile = filename

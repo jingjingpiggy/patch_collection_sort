@@ -1,12 +1,12 @@
 #!/usr/bin/python
-from Parse import Parse
+from Parser import Parser
 import sys
 import tempfile
 import subprocess
 
 def get_patch_info_and_dump(gerritName, projectName):
 
-    def dump_patch_info(output, suffix='', prefix='tmp', dirn=None):
+    def dump(output, suffix='', prefix='tmp', dirn=None):
         tmpfile = tempfile.mkstemp(suffix, prefix, dirn)
         print tmpfile
         with open(tmpfile[1], 'w') as fobj:
@@ -24,26 +24,25 @@ def get_patch_info_and_dump(gerritName, projectName):
     cmd.insert(6, project)
 
     popen = subprocess.Popen(subprocess.list2cmdline(cmd), stdout=subprocess.PIPE, shell=True)
-    popen.communicate()[0]
+    output = popen.communicate()[0]
 
     if popen.returncode:
         print "Get patches info from gerrit fail, please double check!"
         sys.exit()
 
-    return dump_patch_info(output)
+    return dump(output)
 
-def check_out(gerritName, projectName, refs):
+def cherry_pick(gerritName, projectName, refs):
 
     gerritobj = 'ssh://%s@icggerrit.ir.intel.com:29418/%s' % (gerritName, projectName)
-#    cmd = 'git fetch %s %s && git cherry-pick FETCH_HEAD' % (gerritobj, refs)
-    cmd = 'git fetch %s %s && git checkout FETCH_HEAD' % (gerritobj, refs)
+    cmd = 'git fetch %s %s && git cherry-pick FETCH_HEAD' % (gerritobj, refs)
 
     popen = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
-    output = popen.communicate()[0]
+    popen.communicate()[0]
 
     if popen.returncode:
         print "The patch cherry pick fails: %s\n" % refs.split('/')[-2]
-        print output.stderr
+        #print popen.stderr
 
 def has_approval(patchobj_list):
     filtered_list = []
@@ -107,7 +106,7 @@ def big_bubble(f_list):
 def small_bubble(f_list):
     for j in xrange(len(f_list)-1,-1,-1):
         for i in xrange(j):
-            if(f_list[i][0].number > f_list[i+1][0].number):
+            if(f_list[i].number > f_list[i+1].number):
                 f_list[i],f_list[i+1] = f_list[i+1],f_list[i]
     return f_list
 
@@ -117,7 +116,7 @@ if __name__ == '__main__':
     #tmpfile = get_patch_info_and_dump('jinjingx', 'vied-viedandr-libcamhal')
     #print tmpfile
     #tmpfile = "/tmp/tmp1"
-    tmpfile = "/tmp/tmpyFGEz3"
+    tmpfile = "/tmp/tmpaHh3lV"
 
     change_cmd = ["awk", '/change /{print NR}']
     change_cmd.append(tmpfile)
@@ -130,7 +129,7 @@ if __name__ == '__main__':
     lastline_num = subprocess.check_output(lastline_cmd).strip()
 
     for index, value in enumerate(changeline_num):
-        patchobj = Parse(tmpfile)
+        patchobj = Parser(tmpfile)
         if value != changeline_num[-1]:
              patchobj._parse_changes(int(value), int(changeline_num[index+1]))
         else:
@@ -142,19 +141,20 @@ if __name__ == '__main__':
         patchObjs = has_approval(patchObjs)
         filtered = check_value(patchObjs)
 
+    import ipdb;ipdb.set_trace()
     big_sorted_l = big_bubble(filtered)
 
     all_deps = []
     while len(big_sorted_l) >= 1:
-        for i in big_sorted_l:
-            deps_list = find_parents(big_sorted_l, i)
-            all_deps.append(deps_list)
-            for j in deps_list:
-                big_sorted_l.remove(j)
+        deps_list = find_parents(big_sorted_l, big_sorted_l[0])
+        all_deps.append(deps_list)
+        for j in deps_list:
+            big_sorted_l.remove(j)
 
-    small_sorted_l = small_bubble(all_deps)
+    all_deps.reverse()
 
-    for m in small_sorted_l:
-        #cherry_pick(name, project, m[0][0].refs)
+    for m in all_deps:
+        n = small_bubble(m)
         import ipdb;ipdb.set_trace()
-        check_out('jinjingx', 'vied-viedandr-libcamhal', m[0].refs)
+        for x in n:
+            cherry_pick('jinjingx', 'vied-viedandr-libcamhal', x.refs)
