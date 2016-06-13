@@ -1,12 +1,24 @@
 #!/usr/bin/python
 import os
 import sys
-import copy
-import time
 import json
 import tempfile
 import argparse
 import subprocess
+
+class Color_Print(object):
+
+    @staticmethod
+    def red(cls):
+        print "\033[1;31;40m%s \033[0m" % cls
+
+    @staticmethod
+    def green(cls):
+        print "\033[1;32;40m%s \033[0m" % cls
+
+    @staticmethod
+    def yellow(cls):
+        print "\033[1;33;40m%s \033[0m" % cls
 
 class Patch(object):
 
@@ -27,7 +39,9 @@ class Patch(object):
 
 def get_patch_info(user_id, project):
     patches = []
-    query_cmd = 'ssh {user}@icggerrit.ir.intel.com -p 29418 gerrit query status:open project:{project} branch:master --current-patch-set  --format=JSON'.format(user=user_id, project=project)
+    query_cmd = 'ssh {user}@icggerrit.ir.intel.com -p 29418 gerrit query '\
+                'status:open project:{project} branch:master '\
+                '--current-patch-set --format=JSON'.format(user=user_id, project=project)
 
     popen = subprocess.Popen(query_cmd, stdout=subprocess.PIPE, shell=True)
     for i in popen.stdout.readlines():
@@ -41,8 +55,10 @@ def get_patch_info(user_id, project):
         patches.append(patchobj)
 
     if len(patches) == 0:
-        print "No NEW patches in %s project on master branch, or ssh request fails, please check." % project
-        sys.exit()
+        s ='No NEW patches in %s project on master branch, or ssh request '\
+           'fails, please check.' % project
+        Color_Print.red(s)
+        sys.exit(1)
 
     return patches
 
@@ -61,7 +77,6 @@ def check_value(approver_patches):
     filtered = []
 
     for i in approver_patches:
-        #print i.approvals
         for j in i.approvals:
             if j['type'] == "Code-Review" and j['value'] == str(-1):
                 filtered.append(i)
@@ -86,9 +101,9 @@ def find_parents(all_deps, patch_l, obj):
     deps_l=[obj]
     f = False
 
-    def get_patch_obj(patch_l, parent_str):
+    def get_patch_obj(patch_l, parent):
         for i in patch_l:
-            if i.revision == parent_str:
+            if i.revision == parent[0]:
                 return i
         return None
 
@@ -99,7 +114,7 @@ def find_parents(all_deps, patch_l, obj):
 
     if all_deps:
         for i in all_deps:
-            if i[-1].revision == deps_l[0].parents:
+            if i[-1].revision == deps_l[0].parents[0]:
                 f = True
                 for j in deps_l:
                     i.append(j)
@@ -108,12 +123,26 @@ def find_parents(all_deps, patch_l, obj):
 
     return all_deps, deps_l
 
-def big_bubble():
+def big_bubble(f_list):
     for j in xrange(len(f_list)-1,-1,-1):
         for i in xrange(j):
             if(f_list[i].number < f_list[i+1].number):
                 f_list[i],f_list[i+1] = f_list[i+1],f_list[i]
     return f_list
+
+def search_topic(all_deps, num_sorted_patches, topic):
+    topic_patches = []
+
+    for i in num_sorted_patches:
+        if i.topic == topic:
+            topic_patches.append(i)
+
+    if topic_patches:
+        for j in topic_patches:
+            num_sorted_patches.remove(i)
+
+        all_deps, _ = find_parents(all_deps, topic_patches, topic_patches[0])
+    return all_deps, num_sorted_patches
 
 def find_deps_l(all_deps, num):
     for deps in all_deps:
@@ -135,7 +164,8 @@ def exclude_patches(all_deps, exclude_nums):
                     else:
                         all_deps.remove(deps_l)
         else:
-            print "No patch %s found in dependencies list to be excluded" % num
+            s = "No patch %s found in dependencies list to be excluded" % num
+            Color_Print.yellow(s)
     return all_deps
 
 def boost_priority(all_deps, num1, num2):
@@ -144,30 +174,43 @@ def boost_priority(all_deps, num1, num2):
     deps_2l, deps_2l_index = find_deps_l(all_deps, num2)
 
     if not deps_1l:
-        print "No patch %s found in dependencies list to be boosted" % num1
-        sys.exit()
+        s = "No patch %s found in dependencies list to be boosted" % num1
+        Color_Print.red(s)
+        sys.exit(1)
 
     if not deps_2l:
-        print "No patch %s found in dependencies list to be boosted" % num2
-        sys.exit()
+        s = "No patch %s found in dependencies list to be boosted" % num2
+        Color_Print.red(s)
+        sys.exit(1)
 
     all_deps.pop(deps_2l_index)
     all_deps.insert(deps_1l_index, deps_2l)
 
     return all_deps
 
-def cherry_pick(gerritName, projectName, refs):
+def cherry_pick(user_id, project, ref):
 
-    gerritobj = 'ssh://%s@icggerrit.ir.intel.com:29418/%s' % (gerritName, projectName)
-    cmd = 'git fetch %s %s && git cherry-pick FETCH_HEAD' % (gerritobj, refs)
-
-    popen = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
+    cherry_pick_cmd = 'git fetch '\
+            'ssh://{user}@icggerrit.ir.intel.com:29418/{project} {ref} && git '\
+            'cherry-pick FETCH_HEAD'.format(user=user_id, project=project, ref=ref)
+    s = "Start to cherry pick the patch: %s\n" % ref.split('/')[-2]
+    Color_Print.green(s)
+    popen = subprocess.Popen(cherry_pick_cmd, stdout=subprocess.PIPE, shell=True)
     popen.communicate()[0]
 
     if popen.returncode:
-        time.sleep(2)
-        print "The patch that cherry pick fails: %s\n" % refs.split('/')[-2]
-        sys.exit()
+        s = "The patch that cherry pick fails: %s\n" % ref.split('/')[-2]
+        Color_Print.red(s)
+        sys.exit(1)
+
+def push(topic):
+
+    push_cmd = "git push origin HEAD:refs/for/master/%s" % topic
+    ret = os.system(push_cmd)
+    if ret:
+        s = "Push patches to master branch fail."
+        Color_Print.red(s)
+        sys.exit(1)
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Patch collection and sorting')
@@ -179,43 +222,50 @@ def parse_args():
     return parser.parse_args()
 
 if __name__ == '__main__':
-    filtered =[]
+    topic = 'linuxpatch'
+    valued_patches =[]
+
     args = parse_args()
     if not args.name or not args.project:
-        print "The username of gerrit and project are necessary, please refer to help."
-        sys.exit()
+        s = "The username of gerrit and project are necessary, please refer to help."
+        Color_Print.red(s)
+        sys.exit(1)
 
+    import ipdb;ipdb.set_trace()
     patchObjs = get_patch_info(args.name, args.project)
-    #print tmpfile
-    #tmpfile = "/tmp/tmpaHh3lV"
-    #tmpfile = "/tmp/tmpph3OJl"
 
-    if patchObjs:
-        import ipdb;ipdb.set_trace()
-        approver_patches = has_approver(patchObjs)
-        import ipdb;ipdb.set_trace()
-        valued_patches = check_value(approver_patches)
+    #if patchObjs:
+    #    approver_patches = has_approver(patchObjs)
+    #    valued_patches = check_value(approver_patches)
+    #    valued_patches = check_value(patchObjs)
 
-    sorted_patches = big_bubble(valued_patches)
+    #num_sorted_patches = big_bubble(valued_patches)
+    num_sorted_patches = big_bubble(patchObjs)
 
     all_deps = []
-    while len(sorted_patches) >= 1:
-        all_deps, deps_list = find_parents(all_deps, sorted_patches, sorted_patches[0])
+    all_deps, num_sorted_patches = search_topic(all_deps, num_sorted_patches, topic)
+
+    while len(num_sorted_patches) >= 1:
+        all_deps, deps_list = find_parents(all_deps, num_sorted_patches, num_sorted_patches[0])
         for i in deps_list:
-            sorted_patches.remove(i)
+            num_sorted_patches.remove(i)
 
     if args.exclude:
         exclude_nums = args.exclude.split(',')
         all_deps = exclude_patches(all_deps, exclude_nums)
 
-    import ipdb;ipdb.set_trace()
     if args.priority:
         pri_list = args.priority.split(',')
         all_deps = boost_priority(all_deps, pri_list[0], pri_list[1])
 
     all_deps.reverse()
 
+    import ipdb;ipdb.set_trace()
     for deps in all_deps:
         #import ipdb;ipdb.set_trace()
         for i in deps:
-            cherry_pick(args.name, args.project, i.refs)
+            cherry_pick(args.name, args.project, i.ref)
+
+    push(topic)
+    Color_Print.green('Done')
+
