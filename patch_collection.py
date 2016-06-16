@@ -90,8 +90,10 @@ def find_parents(all_deps, patch_l, obj):
                 f = True
                 for j in deps_l:
                     i.append(j)
+
     if not f:
         all_deps.append(deps_l)
+
 
     return all_deps, deps_l
 
@@ -104,6 +106,7 @@ def big_bubble(f_list):
 
 def search_topic(all_deps, num_sorted_patches, topic):
     topic_patches = []
+    deps_l = []
 
     for i in num_sorted_patches:
         if i.topic == topic:
@@ -113,8 +116,9 @@ def search_topic(all_deps, num_sorted_patches, topic):
         for j in topic_patches:
             num_sorted_patches.remove(i)
 
-        all_deps, _ = find_parents(all_deps, topic_patches, topic_patches[0])
-    return all_deps, num_sorted_patches
+        all_deps, deps_l = find_parents(all_deps, topic_patches, topic_patches[0])
+
+    return all_deps, deps_l, num_sorted_patches
 
 def find_deps_l(all_deps, num):
     for deps in all_deps:
@@ -157,6 +161,23 @@ def boost_priority(all_deps, num1, num2):
 
     return all_deps
 
+def check_out(user_id, project, first_deps):
+
+    check_out_cmd = 'git fetch '\
+            'ssh://{user}@icggerrit.ir.intel.com:29418/{project} {ref} && git '\
+            'checkout FETCH_HEAD'.format(user=user_id, project=project, ref=first_deps[0].ref)
+
+    print "Start to check out the first patch."
+    popen = subprocess.Popen(cherry_pick_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+    output = popen.communicate()
+    print output[0]
+    print output[1]
+
+    first_deps.pop(0)
+
+    for i in first_deps:
+        cherry_pick(user_id, project, i.ref)
+
 def cherry_pick(user_id, project, ref):
     conflict_F = False
     unmerged_F = False
@@ -193,6 +214,7 @@ def cherry_pick(user_id, project, ref):
 
 def push(topic):
 
+    new_branch_cmd = "git branch -b "
     #push_cmd = "git push origin HEAD:refs/for/master/%s" % topic
     push_cmd = "git push origin HEAD:refs/for/sandbox/yocto_startup_1214/%s" % topic
     ret = os.system(push_cmd)
@@ -218,6 +240,28 @@ def parse_args():
 
     return parser.parse_args()
 
+def get_current_head():
+    cmd = "git log --pretty=oneline  -1"
+    p = os.popen(cmd)
+    for i in p.readlines():
+        return i.split(' ')[0]
+
+def find_first_patch(all_deps, topic_patches_l, current_head):
+    first_deps = []
+
+    if topic_patches_l:
+        for deps in all_deps:
+            if deps[0].parents == topic_patches_l[-1].revision
+            first_deps.append(deps)
+            all_deps.remove(deps)
+    else:
+        for deps in all_deps:
+            if deps[0].parents == current_head:
+                first_deps.append(deps)
+                all_deps.remove(deps)
+
+    return all_deps, first_deps
+
 if __name__ == '__main__':
     topic = 'linuxpatch'
     valued_patches =[]
@@ -227,6 +271,8 @@ if __name__ == '__main__':
         print "The username of gerrit and project are necessary, please refer to help."
         sys.exit(1)
 
+    current_head = get_current_head()
+
     patchObjs = get_patch_info(args.name, args.project)
 
     if patchObjs:
@@ -235,10 +281,10 @@ if __name__ == '__main__':
     num_sorted_patches = big_bubble(valued_patches)
 
     all_deps = []
-    all_deps, num_sorted_patches = search_topic(all_deps, num_sorted_patches, topic)
+    all_deps, topic_patches_l, num_sorted_patches = search_topic(all_deps, num_sorted_patches, topic)
 
     while len(num_sorted_patches) >= 1:
-        all_deps, deps_list = find_parents(all_deps, num_sorted_patches, num_sorted_patches[0])
+        first_deps, all_deps, deps_list = find_parents(all_deps, num_sorted_patches, num_sorted_patches[0])
         for i in deps_list:
             num_sorted_patches.remove(i)
 
@@ -251,6 +297,10 @@ if __name__ == '__main__':
         all_deps = boost_priority(all_deps, pri_list[0], pri_list[1])
 
     all_deps.reverse()
+
+    first_deps, all_deps = find_first_patch(all_deps, topic_patches_l, current_head)
+
+    check_out(args.name, args.project, first_deps)
 
     conflict_patches = []
     for index, value in enumerate(all_deps):
@@ -265,7 +315,6 @@ if __name__ == '__main__':
                     print "git reset fails"
                     sys.exit(1)
                 break
-
 
     push(topic)
     if conflict_patches:
