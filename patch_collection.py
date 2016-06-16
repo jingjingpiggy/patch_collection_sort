@@ -2,7 +2,6 @@
 import os
 import sys
 import json
-import tempfile
 import argparse
 import subprocess
 
@@ -103,6 +102,7 @@ def find_parents(all_deps, patch_l, obj):
 
     def get_patch_obj(patch_l, parent):
         for i in patch_l:
+            #print i.revision, parent[0]
             if i.revision == parent[0]:
                 return i
         return None
@@ -188,20 +188,54 @@ def boost_priority(all_deps, num1, num2):
 
     return all_deps
 
-def cherry_pick(user_id, project, ref):
+def cherry_pick(user_id, project, ref, prior_deps=None):
+    conflict_F = False
+    unmerged_F = False
+
+    def get_prior_deps_num(prior_deps):
+        prior_deps_num = []
+        for i in prior_deps:
+            prior_deps_num.append(i.number)
+        return prior_deps_num
 
     cherry_pick_cmd = 'git fetch '\
             'ssh://{user}@icggerrit.ir.intel.com:29418/{project} {ref} && git '\
-            'cherry-pick FETCH_HEAD'.format(user=user_id, project=project, ref=ref)
+            'cherry-pick -s FETCH_HEAD'.format(user=user_id, project=project, ref=ref)
+
     s = "Start to cherry pick the patch: %s\n" % ref.split('/')[-2]
     Color_Print.green(s)
-    popen = subprocess.Popen(cherry_pick_cmd, stdout=subprocess.PIPE, shell=True)
-    popen.communicate()[0]
+
+    popen = subprocess.Popen(cherry_pick_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+    output = popen.communicate()
+    print output[0]
+
+    if output[1].find('conflicts') != -1:
+        conflict_F = True
+    if output[1].find('unmerged files') != -1:
+        unmerged_F = True
 
     if popen.returncode:
-        s = "The patch that cherry pick fails: %s\n" % ref.split('/')[-2]
-        Color_Print.red(s)
-        sys.exit(1)
+        Color_Print.yellow(output[1])
+        if conflict_F:
+            if prior_deps:
+                prior_deps_num = get_prior_deps_num(prior_deps)
+                s = 'Patch %s cherry pick fails, which conflicts with patches: '\
+                    '%s  ' % (ref.split('/')[-2], prior_deps_num)
+                Color_Print.red(s)
+                sys.exit(1)
+            else:
+                s = 'Patch %s cherry pick fails, which conflicts with merged patches'
+                Color_Print.red(s)
+                sys.exit(1)
+        elif unmerged_F:
+            s = 'Patch %s cherry pick fails, current repo is not clean, please '\
+                 'check.' % (ref.split('/')[-2])
+            Color_Print.red(s)
+            sys.exit(1)
+        else:
+            s = 'Patch %s cherry pick fails, please check reason.' % ref.split('/')[-2]
+            Color_Print.red(s)
+            sys.exit(1)
 
 def push(topic):
 
@@ -231,13 +265,12 @@ if __name__ == '__main__':
         Color_Print.red(s)
         sys.exit(1)
 
-    import ipdb;ipdb.set_trace()
     patchObjs = get_patch_info(args.name, args.project)
 
     #if patchObjs:
     #    approver_patches = has_approver(patchObjs)
     #    valued_patches = check_value(approver_patches)
-    #    valued_patches = check_value(patchObjs)
+    #    #valued_patches = check_value(patchObjs)
 
     #num_sorted_patches = big_bubble(valued_patches)
     num_sorted_patches = big_bubble(patchObjs)
@@ -260,12 +293,15 @@ if __name__ == '__main__':
 
     all_deps.reverse()
 
-    import ipdb;ipdb.set_trace()
-    for deps in all_deps:
+    for index, value in enumerate(all_deps):
         #import ipdb;ipdb.set_trace()
-        for i in deps:
-            cherry_pick(args.name, args.project, i.ref)
+        for i in value:
+            if index != 0:
+                cherry_pick(args.name, args.project, i.ref, all_deps[index-1])
+            else:
+                cherry_pick(args.name, args.project, i.ref)
 
-    push(topic)
+
+    #push(topic)
     Color_Print.green('Done')
 
