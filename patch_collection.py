@@ -5,20 +5,6 @@ import json
 import argparse
 import subprocess
 
-class Color_Print(object):
-
-    @staticmethod
-    def red(cls):
-        print "\033[1;31;40m%s \033[0m" % cls
-
-    @staticmethod
-    def green(cls):
-        print "\033[1;32;40m%s \033[0m" % cls
-
-    @staticmethod
-    def yellow(cls):
-        print "\033[1;33;40m%s \033[0m" % cls
-
 class Patch(object):
 
     def __init__(self, Id, number, current_patch, topic=None):
@@ -38,9 +24,13 @@ class Patch(object):
 
 def get_patch_info(user_id, project):
     patches = []
+#    query_cmd = 'ssh {user}@icggerrit.ir.intel.com -p 29418 gerrit query '\
+#                'status:open project:{project} branch:master '\
+#                '--current-patch-set --format=JSON'.format(user=user_id, project=project)
+
     query_cmd = 'ssh {user}@icggerrit.ir.intel.com -p 29418 gerrit query '\
-                'status:open project:{project} branch:master '\
-                '--current-patch-set --format=JSON'.format(user=user_id, project=project)
+                'status:open project:{project} branch:sandbox/yocto_startup_1214 '\
+                '--current-patch-set --format=JSON approver=1'.format(user=user_id, project=project)
 
     popen = subprocess.Popen(query_cmd, stdout=subprocess.PIPE, shell=True)
     for i in popen.stdout.readlines():
@@ -54,23 +44,11 @@ def get_patch_info(user_id, project):
         patches.append(patchobj)
 
     if len(patches) == 0:
-        s ='No NEW patches in %s project on master branch, or ssh request '\
+        print 'No NEW patches in %s project on master branch, or ssh request '\
            'fails, please check.' % project
-        Color_Print.red(s)
         sys.exit(1)
 
     return patches
-
-def has_approver(patchobjs):
-    filtered_patches = []
-    for i in patchobjs:
-        if i.approvals:
-            for j in i.approvals:
-                if j['type'] == "Approver":
-                    filtered_patches.append(i)
-                    break;
-
-    return filtered_patches
 
 def check_value(approver_patches):
     filtered = []
@@ -81,12 +59,6 @@ def check_value(approver_patches):
                 filtered.append(i)
                 break
             if j['type'] == "Approver" and j['value'] == str(-1):
-                filtered.append(i)
-                break
-            if j['type'] == "Validation-Android" and j['value'] == str(-1):
-                filtered.append(i)
-                break
-            if j['type'] == "Validation-Linux" and j['value'] == str(-1):
                 filtered.append(i)
                 break
 
@@ -164,8 +136,7 @@ def exclude_patches(all_deps, exclude_nums):
                     else:
                         all_deps.remove(deps_l)
         else:
-            s = "No patch %s found in dependencies list to be excluded" % num
-            Color_Print.yellow(s)
+            print "No patch %s found in dependencies list to be excluded" % num
     return all_deps
 
 def boost_priority(all_deps, num1, num2):
@@ -174,13 +145,11 @@ def boost_priority(all_deps, num1, num2):
     deps_2l, deps_2l_index = find_deps_l(all_deps, num2)
 
     if not deps_1l:
-        s = "No patch %s found in dependencies list to be boosted" % num1
-        Color_Print.red(s)
+        print "No patch %s found in dependencies list to be boosted" % num1
         sys.exit(1)
 
     if not deps_2l:
-        s = "No patch %s found in dependencies list to be boosted" % num2
-        Color_Print.red(s)
+        print "No patch %s found in dependencies list to be boosted" % num2
         sys.exit(1)
 
     all_deps.pop(deps_2l_index)
@@ -188,22 +157,15 @@ def boost_priority(all_deps, num1, num2):
 
     return all_deps
 
-def cherry_pick(user_id, project, ref, prior_deps=None):
+def cherry_pick(user_id, project, ref):
     conflict_F = False
     unmerged_F = False
-
-    def get_prior_deps_num(prior_deps):
-        prior_deps_num = []
-        for i in prior_deps:
-            prior_deps_num.append(i.number)
-        return prior_deps_num
 
     cherry_pick_cmd = 'git fetch '\
             'ssh://{user}@icggerrit.ir.intel.com:29418/{project} {ref} && git '\
             'cherry-pick -s FETCH_HEAD'.format(user=user_id, project=project, ref=ref)
 
-    s = "Start to cherry pick the patch: %s\n" % ref.split('/')[-2]
-    Color_Print.green(s)
+    print "Start to cherry pick the patch: %s\n" % ref.split('/')[-2]
 
     popen = subprocess.Popen(cherry_pick_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
     output = popen.communicate()
@@ -215,36 +177,37 @@ def cherry_pick(user_id, project, ref, prior_deps=None):
         unmerged_F = True
 
     if popen.returncode:
-        Color_Print.yellow(output[1])
+        print output[1]
         if conflict_F:
-            if prior_deps:
-                prior_deps_num = get_prior_deps_num(prior_deps)
-                s = 'Patch %s cherry pick fails, which conflicts with patches: '\
-                    '%s  ' % (ref.split('/')[-2], prior_deps_num)
-                Color_Print.red(s)
-                sys.exit(1)
-            else:
-                s = 'Patch %s cherry pick fails, which conflicts with merged patches'
-                Color_Print.red(s)
-                sys.exit(1)
+            print 'Patch %s cherry pick fails, there is conflictions.' % ref.split('/')[-2]
+            return ref.split('/')[-2]
         elif unmerged_F:
-            s = 'Patch %s cherry pick fails, current repo is not clean, please '\
+            print 'Patch %s cherry pick fails, current repo is not clean, please '\
                  'check.' % (ref.split('/')[-2])
-            Color_Print.red(s)
             sys.exit(1)
         else:
-            s = 'Patch %s cherry pick fails, please check reason.' % ref.split('/')[-2]
-            Color_Print.red(s)
+            print 'Patch %s cherry pick fails, please check reason.' % ref.split('/')[-2]
             sys.exit(1)
+
+    return None
 
 def push(topic):
 
-    push_cmd = "git push origin HEAD:refs/for/master/%s" % topic
+    #push_cmd = "git push origin HEAD:refs/for/master/%s" % topic
+    push_cmd = "git push origin HEAD:refs/for/sandbox/yocto_startup_1214/%s" % topic
     ret = os.system(push_cmd)
     if ret:
-        s = "Push patches to master branch fail."
-        Color_Print.red(s)
+        print "Push patches to master branch fail."
         sys.exit(1)
+
+def review_conflict_patches(user_id, conflict_patches, num):
+    conflict_msg = 'Conflict with patch %s.' % num
+    for i in conflict_patches:
+        for j in i:
+            review_cmd='ssh %s@icggerrit.ir.intel.com -p 29418 gerrit review %s -m "%s"' % (user_id, j.revision, conflict_msg)
+            ret = os.system(review_cmd)
+            if ret:
+                print 'Give review comment fails'
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Patch collection and sorting')
@@ -261,19 +224,15 @@ if __name__ == '__main__':
 
     args = parse_args()
     if not args.name or not args.project:
-        s = "The username of gerrit and project are necessary, please refer to help."
-        Color_Print.red(s)
+        print "The username of gerrit and project are necessary, please refer to help."
         sys.exit(1)
 
     patchObjs = get_patch_info(args.name, args.project)
 
-    #if patchObjs:
-    #    approver_patches = has_approver(patchObjs)
-    #    valued_patches = check_value(approver_patches)
-    #    #valued_patches = check_value(patchObjs)
+    if patchObjs:
+        valued_patches = check_value(patchObjs)
 
-    #num_sorted_patches = big_bubble(valued_patches)
-    num_sorted_patches = big_bubble(patchObjs)
+    num_sorted_patches = big_bubble(valued_patches)
 
     all_deps = []
     all_deps, num_sorted_patches = search_topic(all_deps, num_sorted_patches, topic)
@@ -293,15 +252,24 @@ if __name__ == '__main__':
 
     all_deps.reverse()
 
+    conflict_patches = []
     for index, value in enumerate(all_deps):
-        #import ipdb;ipdb.set_trace()
+        import ipdb;ipdb.set_trace()
         for i in value:
-            if index != 0:
-                cherry_pick(args.name, args.project, i.ref, all_deps[index-1])
-            else:
-                cherry_pick(args.name, args.project, i.ref)
+            conflict_p = cherry_pick(args.name, args.project, i.ref)
+            if conflict_p:
+                deps, index = find_deps_l(all_deps, conflict_p)
+                conflict_patches.append(deps)
+                ret = os.system('git reset --hard')
+                if ret:
+                    print "git reset fails"
+                    sys.exit(1)
+                break
 
 
-    #push(topic)
-    Color_Print.green('Done')
+    push(topic)
+    if conflict_patches:
+        review_conflict_patches(args.name, conflict_patches, value[-1].number)
+
+    print ('Done')
 
