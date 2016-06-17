@@ -12,6 +12,7 @@ class Patch(object):
         self.Id = Id
         self.number = number
         self._currentpatchset = current_patch
+        self.owner = owner
 
         if self._currentpatchset:
             self.ref = self._currentpatchset['ref']
@@ -38,9 +39,10 @@ def get_patch_info(user_id, project):
         if patch.has_key('rowCount'):
             continue
         if patch.has_key('topic'):
-            patchobj = Patch(patch['id'], patch['number'], patch['currentPatchSet'], patch['topic'])
+            patchobj = Patch(patch['id'], patch['number'], \
+                    patch['currentPatchSet'], patch['owner'] patch['topic'])
         else:
-            patchobj = Patch(patch['id'], patch['number'], patch['currentPatchSet'])
+            patchobj = Patch(patch['id'], patch['number'], patch['currentPatchSet'], patch['owner'])
         patches.append(patchobj)
 
     if len(patches) == 0:
@@ -54,13 +56,16 @@ def check_value(approver_patches):
     filtered = []
 
     for i in approver_patches:
-        for j in i.approvals:
-            if j['type'] == "Code-Review" and j['value'] == str(-1):
-                filtered.append(i)
-                break
-            if j['type'] == "Approver" and j['value'] == str(-1):
-                filtered.append(i)
-                break
+        if i.approvals:
+            for j in i.approvals:
+                if j['type'] == "Code-Review" and j['value'] == str(-1):
+                    filtered.append(i)
+                    break
+                if j['type'] == "Approver" and j['value'] == str(-1):
+                    filtered.append(i)
+                    break
+        else:
+            continue
 
     for m in filtered:
         if m in approver_patches:
@@ -114,7 +119,7 @@ def search_topic(all_deps, num_sorted_patches, topic):
 
     if topic_patches:
         for j in topic_patches:
-            num_sorted_patches.remove(i)
+            num_sorted_patches.remove(j)
 
         all_deps, deps_l = find_parents(all_deps, topic_patches, topic_patches[0])
 
@@ -168,7 +173,7 @@ def check_out(user_id, project, first_deps):
             'checkout FETCH_HEAD'.format(user=user_id, project=project, ref=first_deps[0].ref)
 
     print "Start to check out the first patch."
-    popen = subprocess.Popen(cherry_pick_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+    popen = subprocess.Popen(check_out_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
     output = popen.communicate()
     print output[0]
     print output[1]
@@ -214,7 +219,12 @@ def cherry_pick(user_id, project, ref):
 
 def push(topic):
 
-    new_branch_cmd = "git branch -b "
+    new_branch_cmd = "git checkout -b sandbox_backup"
+    ret = os.system(new_branch_cmd)
+    if ret:
+        print "Chckout new branch fails."
+        sys.exit(1)
+
     #push_cmd = "git push origin HEAD:refs/for/master/%s" % topic
     push_cmd = "git push origin HEAD:refs/for/sandbox/yocto_startup_1214/%s" % topic
     ret = os.system(push_cmd)
@@ -246,21 +256,49 @@ def get_current_head():
     for i in p.readlines():
         return i.split(' ')[0]
 
-def find_first_patch(all_deps, topic_patches_l, current_head):
+def find_first_deps(all_deps, topic_patches_l, current_head):
     first_deps = []
 
     if topic_patches_l:
         for deps in all_deps:
-            if deps[0].parents == topic_patches_l[-1].revision
-            first_deps.append(deps)
-            all_deps.remove(deps)
+            if deps[0].parents[0] == topic_patches_l[-1].revision:
+                first_deps = deps
+                all_deps.remove(deps)
+                break
     else:
         for deps in all_deps:
-            if deps[0].parents == current_head:
-                first_deps.append(deps)
+            if deps[0].parents[0] == current_head:
+                first_deps = deps
                 all_deps.remove(deps)
+                break
 
-    return all_deps, first_deps
+    if not first_deps:
+        print "Donot find the first deps."
+
+    return first_deps, all_deps
+
+def autoreview(first, all_, conflict):
+    approvers = ['xiaozhou', 'caoxi']
+    for i in conflict:
+        all_.remove(i)
+
+    for deps in first:
+        for patch in deps:
+            id_index = 0
+            for index,value in enumerate(approvers):
+                if value == patch.owner['name']:
+                    if index == 0:
+                        id_index = index + 1
+                    else:
+                        pass
+
+            autoreview_cmd = 'ssh %s@icggerrit.ir.intel.com -p 29418 gerrit review %s '\
+                '--code-review +1 --approver +1' % (approvers[id_index], patch.revision)
+
+           ret = os.system(autoreview_cmd)
+           if ret:
+               print "autoreview patch %s fails" % patch.number
+
 
 if __name__ == '__main__':
     topic = 'linuxpatch'
@@ -273,6 +311,7 @@ if __name__ == '__main__':
 
     current_head = get_current_head()
 
+    import ipdb;ipdb.set_trace()
     patchObjs = get_patch_info(args.name, args.project)
 
     if patchObjs:
@@ -281,10 +320,10 @@ if __name__ == '__main__':
     num_sorted_patches = big_bubble(valued_patches)
 
     all_deps = []
-    all_deps, topic_patches_l, num_sorted_patches = search_topic(all_deps, num_sorted_patches, topic)
+    #all_deps, topic_patches_l, num_sorted_patches = search_topic(all_deps, num_sorted_patches, topic)
 
     while len(num_sorted_patches) >= 1:
-        first_deps, all_deps, deps_list = find_parents(all_deps, num_sorted_patches, num_sorted_patches[0])
+        all_deps, deps_list = find_parents(all_deps, num_sorted_patches, num_sorted_patches[0])
         for i in deps_list:
             num_sorted_patches.remove(i)
 
@@ -298,13 +337,13 @@ if __name__ == '__main__':
 
     all_deps.reverse()
 
-    first_deps, all_deps = find_first_patch(all_deps, topic_patches_l, current_head)
+    import ipdb;ipdb.set_trace()
+    first_deps, all_deps = find_first_deps(all_deps, topic_patches_l, current_head)
 
     check_out(args.name, args.project, first_deps)
 
     conflict_patches = []
     for index, value in enumerate(all_deps):
-        import ipdb;ipdb.set_trace()
         for i in value:
             conflict_p = cherry_pick(args.name, args.project, i.ref)
             if conflict_p:
@@ -320,5 +359,6 @@ if __name__ == '__main__':
     if conflict_patches:
         review_conflict_patches(args.name, conflict_patches, value[-1].number)
 
+    import ipdb;ipdb.set_trace()
+    autoreview(first_deps, all_deps, conflict_patches)
     print ('Done')
-
