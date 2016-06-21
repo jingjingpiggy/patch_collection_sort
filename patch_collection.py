@@ -74,7 +74,6 @@ def find_parents(all_deps, patch_l, obj):
 
     def get_patch_obj(patch_l, revision):
         for i in patch_l:
-            #print i.revision, parent[0]
             if i.parents[0] == revision:
                 return i
         return None
@@ -166,7 +165,7 @@ def boost_priority(all_deps, num1, num2):
 def check_out(user_id, project, topic_patches, first_deps):
 
     if topic_patches:
-        print "Start to check out the topic patches."
+        print "Start to check out the topic patches %s." % topic_patches[0][-1].number
         check_out_cmd = 'git fetch '\
             'ssh://%s@icggerrit.ir.intel.com:29418/%s %s && git '\
             'checkout FETCH_HEAD' % (user_id, project, topic_patches[0][-1].ref)
@@ -175,7 +174,7 @@ def check_out(user_id, project, topic_patches, first_deps):
             print "check out topic patches fail"
             sys.exit(1)
     elif first_deps:
-        print "Start to check out the first patch."
+        print "Start to check out the first patch %s of first dependent patch series." % first_deps[0].number
         check_out_cmd = 'git fetch '\
             'ssh://%s@icggerrit.ir.intel.com:29418/%s %s && git '\
             'checkout FETCH_HEAD' % (user_id, project, first_deps[0].ref)
@@ -186,6 +185,7 @@ def check_out(user_id, project, topic_patches, first_deps):
         first_deps.pop(0)
 
         for i in first_deps:
+            print "Start to cherry other patches of first dependent patch series."
             cherry_pick(user_id, project, i.ref)
 
 def cherry_pick(user_id, project, ref):
@@ -213,8 +213,7 @@ def cherry_pick(user_id, project, ref):
             print 'Patch %s cherry pick fails, there is conflictions.' % ref.split('/')[-2]
             return False
         elif unmerged_F:
-            print 'Patch %s cherry pick fails, current repo is not clean, please '\
-                 'check.' % (ref.split('/')[-2])
+            print 'Patch %s cherry pick fails, current repo is not clean, please check.' % (ref.split('/')[-2])
             sys.exit(1)
         else:
             print 'Patch %s cherry pick fails, please check reason.' % ref.split('/')[-2]
@@ -223,12 +222,17 @@ def cherry_pick(user_id, project, ref):
         return True
 
 def push(topic):
-    os.system('git branch -D master_backup')
 
-    new_branch_cmd = "git checkout -b master_backup"
-    ret = os.system(new_branch_cmd)
+    print "Delete master_backup branch"
+    ret = os.system('git branch -D master_backup')
     if ret:
-        print "Checkout new branch fails."
+        print "Delete master_backup branch fails."
+        sys.exit(1)
+
+    print "Create new master_branchup branch"
+    ret = os.system("git checkout -b master_backup")
+    if ret:
+        print "Checkout new master_backup branch fails."
         sys.exit(1)
 
     push_cmd = "git push origin HEAD:refs/for/master/%s" % topic
@@ -247,10 +251,12 @@ def review_conflict_patches(user_id, conflict_s, conflict_buffer):
                 else:
                     msg_cmd='ssh %s@icggerrit.ir.intel.com -p 29418 gerrit review %s -m "\'Conflict with master.\'"' % (user_id, obj.revision)
 
+                print "Give code review -1 onto gerrit for %s" % obj.number
                 ret = os.system(review_cmd)
                 if ret:
                     print 'Give review comment fails'
 
+                print "Give conflict comment onto gerrit for %s" % obj.number
                 ret = os.system(msg_cmd)
                 if ret:
                     print 'Give message comment fails'
@@ -279,7 +285,7 @@ def find_first_deps(all_deps, current_head, topic):
     if topic_patches_l:
         all_deps.remove(topic_patches_l[0])
 
-    #Find first deps which include the first patch that depend on topic patches for current master
+    #Find first deps which include the first patch that depend on the current master
     for deps in all_deps:
         if deps[0].parents[0] == current_head:
             first_deps = deps
@@ -303,13 +309,15 @@ def autoreview(first, successful_s):
 
             autoreview_cmd = 'ssh %s@icggerrit.ir.intel.com -p 29418 gerrit review %s '\
                 '--code-review +1 --approver +1' % (approvers[id_index], patch.revision)
-            print autoreview_cmd
+
+            print "Give code review +1 and approver +1 onto gerrit for patch %s" % patch.number 
             ret = os.system(autoreview_cmd)
             if ret:
-                print "autoreview patch %s fails" % patch.number
+                print "Autoreview patch %s fails" % patch.number
 
-    if first:
-        review_action(first[0])
+#if first:
+#review_action(first[0])
+    review_action(first)
     review_action(successful_s)
 
 def parse_args():
@@ -332,6 +340,7 @@ if __name__ == '__main__':
 
     current_head = get_current_head()
 
+    print "===Wrapper patch objects.==="
     patchObjs = get_patch_info(args.name, args.project)
 
     if patchObjs:
@@ -342,8 +351,10 @@ if __name__ == '__main__':
             print "No patches need to be rebased..."
             sys.exit(0)
 
+    print "===Sort the patches according to patch number.===" 
     num_sorted_patches = small_bubble(valued_patches)
 
+    print "===Resolve dependencies.==="
     all_deps = []
 
     while len(num_sorted_patches) >= 1:
@@ -359,8 +370,14 @@ if __name__ == '__main__':
         pri_list = args.priority.split(',')
         all_deps = boost_priority(all_deps, pri_list[0], pri_list[1])
 
+    print "===Find first deps and topic patches.==="
     first_deps, topic_patches, all_deps = find_first_deps(all_deps, current_head, topic)
 
+    if not all_deps and not first_deps:
+        print "No patches need to be rebased..."
+        sys.exit(0)
+
+    print "===Start to checkout and cherrypick.==="
     check_out(args.name, args.project, topic_patches, first_deps)
 
     successful_set = set()
@@ -383,10 +400,14 @@ if __name__ == '__main__':
             else:
                 successful_set.add(i)
 
-    push(topic)
+#print "===Push local patch series to gerrit.==="
+#push(topic)
 
-    autoreview(first_deps, successful_set)
-    if conflict_patches:
-        review_conflict_patches(args.name, conflict_set, conflict_buffer)
+#    print "===Autoreview for patch series.==="
+#    autoreview(first_deps, successful_set)
+
+#    print "===Autoreview for conflict patches.==="
+#    if conflict_patches:
+#        review_conflict_patches(args.name, conflict_set, conflict_buffer)
 
     print ('Done')
