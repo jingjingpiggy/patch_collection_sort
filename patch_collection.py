@@ -7,7 +7,7 @@ import subprocess
 
 class Patch(object):
 
-    def __init__(self, Id, number, current_patch, topic=None):
+    def __init__(self, Id, number, current_patch, owner, topic=None):
         self.topic = topic
         self.Id = Id
         self.number = number
@@ -25,13 +25,13 @@ class Patch(object):
 
 def get_patch_info(user_id, project):
     patches = []
-#    query_cmd = 'ssh {user}@icggerrit.ir.intel.com -p 29418 gerrit query '\
-#                'status:open project:{project} branch:master '\
-#                '--current-patch-set --format=JSON'.format(user=user_id, project=project)
-
     query_cmd = 'ssh {user}@icggerrit.ir.intel.com -p 29418 gerrit query '\
-                'status:open project:{project} branch:sandbox/yocto_startup_1214 '\
+                'status:open project:{project} branch:master '\
                 '--current-patch-set --format=JSON approver=1'.format(user=user_id, project=project)
+
+    #query_cmd = 'ssh {user}@icggerrit.ir.intel.com -p 29418 gerrit query '\
+    #            'status:open project:{project} branch:sandbox/yocto_startup_1214 '\
+    #            '--current-patch-set --format=JSON approver=1'.format(user=user_id, project=project)
 
     popen = subprocess.Popen(query_cmd, stdout=subprocess.PIPE, shell=True)
     for i in popen.stdout.readlines():
@@ -39,8 +39,7 @@ def get_patch_info(user_id, project):
         if patch.has_key('rowCount'):
             continue
         if patch.has_key('topic'):
-            patchobj = Patch(patch['id'], patch['number'], \
-                    patch['currentPatchSet'], patch['owner'] patch['topic'])
+            patchobj = Patch(patch['id'], patch['number'], patch['currentPatchSet'], patch['owner'], patch['topic'])
         else:
             patchobj = Patch(patch['id'], patch['number'], patch['currentPatchSet'], patch['owner'])
         patches.append(patchobj)
@@ -77,17 +76,17 @@ def find_parents(all_deps, patch_l, obj):
     deps_l=[obj]
     f = False
 
-    def get_patch_obj(patch_l, parent):
+    def get_patch_obj(patch_l, revision):
         for i in patch_l:
             #print i.revision, parent[0]
-            if i.revision == parent[0]:
+            if i.parents[0] == revision:
                 return i
         return None
 
     while obj:
-        obj = get_patch_obj(patch_l, obj.parents)
+        obj = get_patch_obj(patch_l, obj.revision)
         if obj:
-            deps_l.insert(0, obj)
+            deps_l.append(obj)
 
     if all_deps:
         for i in all_deps:
@@ -102,28 +101,12 @@ def find_parents(all_deps, patch_l, obj):
 
     return all_deps, deps_l
 
-def big_bubble(f_list):
+def small_bubble(f_list):
     for j in xrange(len(f_list)-1,-1,-1):
         for i in xrange(j):
-            if(f_list[i].number < f_list[i+1].number):
+            if(f_list[i].number > f_list[i+1].number):
                 f_list[i],f_list[i+1] = f_list[i+1],f_list[i]
     return f_list
-
-def search_topic(all_deps, num_sorted_patches, topic):
-    topic_patches = []
-    deps_l = []
-
-    for i in num_sorted_patches:
-        if i.topic == topic:
-            topic_patches.append(i)
-
-    if topic_patches:
-        for j in topic_patches:
-            num_sorted_patches.remove(j)
-
-        all_deps, deps_l = find_parents(all_deps, topic_patches, topic_patches[0])
-
-    return all_deps, deps_l, num_sorted_patches
 
 def find_deps_l(all_deps, num):
     for deps in all_deps:
@@ -166,19 +149,27 @@ def boost_priority(all_deps, num1, num2):
 
     return all_deps
 
-def check_out(user_id, project, first_deps):
+def check_out(user_id, project, topic_patches, first_deps):
 
-    check_out_cmd = 'git fetch '\
-            'ssh://{user}@icggerrit.ir.intel.com:29418/{project} {ref} && git '\
-            'checkout FETCH_HEAD'.format(user=user_id, project=project, ref=first_deps[0].ref)
-
-    print "Start to check out the first patch."
-    popen = subprocess.Popen(check_out_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
-    output = popen.communicate()
-    print output[0]
-    print output[1]
-
-    first_deps.pop(0)
+    if topic_patches:
+        print "Start to check out the topic patches."
+        check_out_cmd = 'git fetch '\
+            'ssh://%s@icggerrit.ir.intel.com:29418/%s %s && git '\
+            'checkout FETCH_HEAD' % (user_id, project, topic_patches[0][-1].ref)
+        ret = os.system(check_out_cmd)
+        if ret:
+            print "check out topic patches fail"
+            sys.exit(1)
+    else:
+        print "Start to check out the first patch."
+        check_out_cmd = 'git fetch '\
+            'ssh://%s@icggerrit.ir.intel.com:29418/%s %s && git '\
+            'checkout FETCH_HEAD' % (user_id, project, first_deps[0].ref)
+        ret = os.system(check_out_cmd)
+        if ret:
+            print "check out first patch fail"
+            sys.exit(1)
+        first_deps.pop(0)
 
     for i in first_deps:
         cherry_pick(user_id, project, i.ref)
@@ -219,7 +210,8 @@ def cherry_pick(user_id, project, ref):
 
 def push(topic):
 
-    new_branch_cmd = "git checkout -b sandbox_backup"
+    #new_branch_cmd = "git checkout -b sandbox_backup"
+    new_branch_cmd = "git checkout -b master_backup"
     ret = os.system(new_branch_cmd)
     if ret:
         print "Chckout new branch fails."
@@ -230,13 +222,13 @@ def push(topic):
     ret = os.system(push_cmd)
     if ret:
         print "Push patches to master branch fail."
-        sys.exit(1)
 
 def review_conflict_patches(user_id, conflict_patches, num):
     conflict_msg = 'Conflict with patch %s.' % num
     for i in conflict_patches:
         for j in i:
-            review_cmd='ssh %s@icggerrit.ir.intel.com -p 29418 gerrit review %s -m "%s"' % (user_id, j.revision, conflict_msg)
+            review_cmd='ssh %s@icggerrit.ir.intel.com -p 29418 gerrit review %s --code-review -1' % user_id, j.revision
+            msg_cmd='ssh %s@icggerrit.ir.intel.com -p 29418 gerrit review %s -m "%s"' % (user_id, j.revision, conflict_msg)
             ret = os.system(review_cmd)
             if ret:
                 print 'Give review comment fails'
@@ -256,12 +248,29 @@ def get_current_head():
     for i in p.readlines():
         return i.split(' ')[0]
 
-def find_first_deps(all_deps, topic_patches_l, current_head):
+def find_first_deps(all_deps, current_head, topic):
+    import ipdb;ipdb.set_trace()
     first_deps = []
+    topic_patches_l = []
 
+    def func(deps):
+        for patch in deps:
+            if patch.topic == topic:
+                topic_patches_l.append(deps)
+                return True
+
+    for deps in all_deps:
+        if func(deps):
+            break
+
+    #Remove topic patches from all_deps
+    if topic_patches_l:
+        all_deps.remove(topic_patches_l[0])
+
+    #Find first deps which include the first patch that depend on topic patches for current master
     if topic_patches_l:
         for deps in all_deps:
-            if deps[0].parents[0] == topic_patches_l[-1].revision:
+            if deps[0].parents[0] == topic_patches_l[0][-1].revision:
                 first_deps = deps
                 all_deps.remove(deps)
                 break
@@ -272,36 +281,37 @@ def find_first_deps(all_deps, topic_patches_l, current_head):
                 all_deps.remove(deps)
                 break
 
-    if not first_deps:
-        print "Donot find the first deps."
-
-    return first_deps, all_deps
+    return first_deps, topic_patches_l, all_deps
 
 def autoreview(first, all_, conflict):
-    approvers = ['xiaozhou', 'caoxi']
+    approvers = ['xiaozhou', 'yangliang']
+
+    def traverse(deps_l):
+        for deps in deps_l:
+            for patch in deps:
+                id_index = 0
+                for index,value in enumerate(approvers):
+                    if value == patch.owner['username']:
+                        if index == 0:
+                            id_index = index + 1
+                        else:
+                            pass
+
+                autoreview_cmd = 'ssh %s@icggerrit.ir.intel.com -p 29418 gerrit review %s '\
+                    '--code-review +1 --approver +1' % (approvers[id_index], patch.revision)
+                print autoreview_cmd
+                ret = os.system(autoreview_cmd)
+                if ret:
+                    print "autoreview patch %s fails" % patch.number
+
     for i in conflict:
         all_.remove(i)
 
-    for deps in first:
-        for patch in deps:
-            id_index = 0
-            for index,value in enumerate(approvers):
-                if value == patch.owner['name']:
-                    if index == 0:
-                        id_index = index + 1
-                    else:
-                        pass
-
-            autoreview_cmd = 'ssh %s@icggerrit.ir.intel.com -p 29418 gerrit review %s '\
-                '--code-review +1 --approver +1' % (approvers[id_index], patch.revision)
-
-           ret = os.system(autoreview_cmd)
-           if ret:
-               print "autoreview patch %s fails" % patch.number
-
+    traverse(first)
+    traverse(all_)
 
 if __name__ == '__main__':
-    topic = 'linuxpatch'
+    topic = 'linux_camhal_preint'
     valued_patches =[]
 
     args = parse_args()
@@ -311,17 +321,16 @@ if __name__ == '__main__':
 
     current_head = get_current_head()
 
-    import ipdb;ipdb.set_trace()
     patchObjs = get_patch_info(args.name, args.project)
 
     if patchObjs:
         valued_patches = check_value(patchObjs)
 
-    num_sorted_patches = big_bubble(valued_patches)
+    num_sorted_patches = small_bubble(valued_patches)
 
     all_deps = []
-    #all_deps, topic_patches_l, num_sorted_patches = search_topic(all_deps, num_sorted_patches, topic)
 
+    import ipdb;ipdb.set_trace()
     while len(num_sorted_patches) >= 1:
         all_deps, deps_list = find_parents(all_deps, num_sorted_patches, num_sorted_patches[0])
         for i in deps_list:
@@ -335,12 +344,9 @@ if __name__ == '__main__':
         pri_list = args.priority.split(',')
         all_deps = boost_priority(all_deps, pri_list[0], pri_list[1])
 
-    all_deps.reverse()
+    first_deps, topic_patches, all_deps = find_first_deps(all_deps, current_head, topic)
 
-    import ipdb;ipdb.set_trace()
-    first_deps, all_deps = find_first_deps(all_deps, topic_patches_l, current_head)
-
-    check_out(args.name, args.project, first_deps)
+    check_out(args.name, args.project, topic_patches, first_deps)
 
     conflict_patches = []
     for index, value in enumerate(all_deps):
@@ -348,17 +354,18 @@ if __name__ == '__main__':
             conflict_p = cherry_pick(args.name, args.project, i.ref)
             if conflict_p:
                 deps, index = find_deps_l(all_deps, conflict_p)
+                ......
                 conflict_patches.append(deps)
                 ret = os.system('git reset --hard')
                 if ret:
                     print "git reset fails"
-                    sys.exit(1)
-                break
 
     push(topic)
-    if conflict_patches:
-        review_conflict_patches(args.name, conflict_patches, value[-1].number)
 
-    import ipdb;ipdb.set_trace()
-    autoreview(first_deps, all_deps, conflict_patches)
+    #autoreview(first_deps, all_deps, conflict_patches)
+
+    if conflict_patches:
+        current_head = get_current_head()
+        review_conflict_patches(args.name, conflict_patches, current_head)
+
     print ('Done')
