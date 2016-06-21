@@ -63,6 +63,9 @@ def check_value(approver_patches):
                 if j['type'] == "Approver" and j['value'] == str(-1):
                     filtered.append(i)
                     break
+                if j['type'] == "Integrator" and j['value'] == str(1):
+                    filtered.append(i)
+                    break
         else:
             continue
 
@@ -98,7 +101,6 @@ def find_parents(all_deps, patch_l, obj):
     if not f:
         all_deps.append(deps_l)
 
-
     return all_deps, deps_l
 
 def small_bubble(f_list):
@@ -114,6 +116,25 @@ def find_deps_l(all_deps, num):
             if patchobj.number == num:
                 return deps, all_deps.index(deps)
     return None, None
+
+def find_patch(first_deps, topic_patches, all_deps):
+    current_head = get_current_head()
+    patch_num = []
+
+    def find(deps):
+        for i in deps:
+            if i.revision == current_head:
+                patch_num.append(i.number)
+                break
+
+    find(first_deps)
+    find(topic_patches)
+    find(all_deps)
+
+    if patch_num:
+        return patch_num(0)
+    else:
+        return None
 
 def exclude_patches(all_deps, exclude_nums):
     for num in exclude_nums:
@@ -160,7 +181,7 @@ def check_out(user_id, project, topic_patches, first_deps):
         if ret:
             print "check out topic patches fail"
             sys.exit(1)
-    else:
+    elif first_deps:
         print "Start to check out the first patch."
         check_out_cmd = 'git fetch '\
             'ssh://%s@icggerrit.ir.intel.com:29418/%s %s && git '\
@@ -171,8 +192,8 @@ def check_out(user_id, project, topic_patches, first_deps):
             sys.exit(1)
         first_deps.pop(0)
 
-    for i in first_deps:
-        cherry_pick(user_id, project, i.ref)
+        for i in first_deps:
+            cherry_pick(user_id, project, i.ref)
 
 def cherry_pick(user_id, project, ref):
     conflict_F = False
@@ -197,7 +218,7 @@ def cherry_pick(user_id, project, ref):
         print output[1]
         if conflict_F:
             print 'Patch %s cherry pick fails, there is conflictions.' % ref.split('/')[-2]
-            return ref.split('/')[-2]
+            return False
         elif unmerged_F:
             print 'Patch %s cherry pick fails, current repo is not clean, please '\
                  'check.' % (ref.split('/')[-2])
@@ -205,8 +226,8 @@ def cherry_pick(user_id, project, ref):
         else:
             print 'Patch %s cherry pick fails, please check reason.' % ref.split('/')[-2]
             sys.exit(1)
-
-    return None
+    else:
+        return True
 
 def push(topic):
 
@@ -223,15 +244,23 @@ def push(topic):
     if ret:
         print "Push patches to master branch fail."
 
-def review_conflict_patches(user_id, conflict_patches, num):
-    conflict_msg = 'Conflict with patch %s.' % num
-    for i in conflict_patches:
-        for j in i:
-            review_cmd='ssh %s@icggerrit.ir.intel.com -p 29418 gerrit review %s --code-review -1' % user_id, j.revision
-            msg_cmd='ssh %s@icggerrit.ir.intel.com -p 29418 gerrit review %s -m "%s"' % (user_id, j.revision, conflict_msg)
-            ret = os.system(review_cmd)
-            if ret:
-                print 'Give review comment fails'
+def review_conflict_patches(user_id, successful_s, conflict_buffer):
+    for key, value in conflict_buffer.iteritems():
+        for obj in conflict_buffer:
+            if obj.number == key:
+                review_cmd='ssh %s@icggerrit.ir.intel.com -p 29418 gerrit review %s --code-review -1' % (user_id, obj.revision)
+                if value:
+                    msg_cmd='ssh %s@icggerrit.ir.intel.com -p 29418 gerrit review %s -m "\'Conflict with patch %s.\'"' % (user_id, obj.revision, value)
+                else:
+                    msg_cmd='ssh %s@icggerrit.ir.intel.com -p 29418 gerrit review %s -m "\'Conflict with master.\'"' % (user_id, obj.revision)
+
+                ret = os.system(review_cmd)
+                if ret:
+                    print 'Give review comment fails'
+
+                ret = os.system(msg_cmd)
+                if ret:
+                    print 'Give message comment fails'
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Patch collection and sorting')
@@ -249,7 +278,6 @@ def get_current_head():
         return i.split(' ')[0]
 
 def find_first_deps(all_deps, current_head, topic):
-    import ipdb;ipdb.set_trace()
     first_deps = []
     topic_patches_l = []
 
@@ -268,47 +296,43 @@ def find_first_deps(all_deps, current_head, topic):
         all_deps.remove(topic_patches_l[0])
 
     #Find first deps which include the first patch that depend on topic patches for current master
-    if topic_patches_l:
-        for deps in all_deps:
-            if deps[0].parents[0] == topic_patches_l[0][-1].revision:
-                first_deps = deps
-                all_deps.remove(deps)
-                break
-    else:
-        for deps in all_deps:
-            if deps[0].parents[0] == current_head:
-                first_deps = deps
-                all_deps.remove(deps)
-                break
+    #if topic_patches_l:
+    #    for deps in all_deps:
+    #        if deps[0].parents[0] == topic_patches_l[0][-1].revision:
+    #            first_deps = deps
+    #            all_deps.remove(deps)
+    #            break
+    #else:
+    for deps in all_deps:
+        if deps[0].parents[0] == current_head:
+            first_deps = deps
+            all_deps.remove(deps)
+            break
 
     return first_deps, topic_patches_l, all_deps
 
-def autoreview(first, all_, conflict):
+def autoreview(first, successful_s):
     approvers = ['xiaozhou', 'yangliang']
 
-    def traverse(deps_l):
-        for deps in deps_l:
-            for patch in deps:
-                id_index = 0
-                for index,value in enumerate(approvers):
-                    if value == patch.owner['username']:
-                        if index == 0:
-                            id_index = index + 1
-                        else:
-                            pass
+    def review_action(patches_l):
+        for patch in patches_l:
+            id_index = 0
+            for index,value in enumerate(approvers):
+                if value == patch.owner['username']:
+                    if index == 0:
+                        id_index = index + 1
+                    else:
+                        pass
 
-                autoreview_cmd = 'ssh %s@icggerrit.ir.intel.com -p 29418 gerrit review %s '\
-                    '--code-review +1 --approver +1' % (approvers[id_index], patch.revision)
-                print autoreview_cmd
-                ret = os.system(autoreview_cmd)
-                if ret:
-                    print "autoreview patch %s fails" % patch.number
+            autoreview_cmd = 'ssh %s@icggerrit.ir.intel.com -p 29418 gerrit review %s '\
+                '--code-review +1 --approver +1' % (approvers[id_index], patch.revision)
+            print autoreview_cmd
+            ret = os.system(autoreview_cmd)
+            if ret:
+                print "autoreview patch %s fails" % patch.number
 
-    for i in conflict:
-        all_.remove(i)
-
-    traverse(first)
-    traverse(all_)
+    review_action(first[0])
+    review_action(successful_s)
 
 if __name__ == '__main__':
     topic = 'linux_camhal_preint'
@@ -348,24 +372,31 @@ if __name__ == '__main__':
 
     check_out(args.name, args.project, topic_patches, first_deps)
 
-    conflict_patches = []
+    successful_set = set()
+    conflict_set = set()
+    conflict_buffer = {}
     for index, value in enumerate(all_deps):
         for i in value:
-            conflict_p = cherry_pick(args.name, args.project, i.ref)
-            if conflict_p:
-                deps, index = find_deps_l(all_deps, conflict_p)
-                ......
-                conflict_patches.append(deps)
+            if not cherry_pick(args.name, args.project, i.ref):
+                conflict_set.add(i)
+                patch_num = find_patch(first_deps, topic_patches, all_deps)
+                if patch_num:
+                    conflict_buffer[i.number] = patch_num
+                else:
+                    conflict_buffer[i.number] = None
+
                 ret = os.system('git reset --hard')
                 if ret:
                     print "git reset fails"
+                break
+            else:
+                successful_set.add(i)
 
     push(topic)
 
-    #autoreview(first_deps, all_deps, conflict_patches)
+    autoreview(first_deps, successful_set)
 
     if conflict_patches:
-        current_head = get_current_head()
-        review_conflict_patches(args.name, conflict_patches, current_head)
+        review_conflict_patches(args.name, successful_set, conflict_buffer)
 
     print ('Done')
