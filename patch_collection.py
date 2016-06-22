@@ -29,10 +29,6 @@ def get_patch_info(user_id, project):
                 'status:open project:{project} branch:master '\
                 '--current-patch-set --format=JSON approver=1'.format(user=user_id, project=project)
 
-    #query_cmd = 'ssh {user}@icggerrit.ir.intel.com -p 29418 gerrit query '\
-    #            'status:open project:{project} branch:sandbox/yocto_startup_1214 '\
-    #            '--current-patch-set --format=JSON approver=1'.format(user=user_id, project=project)
-
     popen = subprocess.Popen(query_cmd, stdout=subprocess.PIPE, shell=True)
     for i in popen.stdout.readlines():
         patch = json.loads(i)
@@ -47,7 +43,7 @@ def get_patch_info(user_id, project):
     if len(patches) == 0:
         print 'No NEW patches in %s project on master branch, or ssh request '\
            'fails, please check.' % project
-        sys.exit(1)
+        sys.exit(0)
 
     return patches
 
@@ -61,9 +57,6 @@ def check_value(approver_patches):
                     filtered.append(i)
                     break
                 if j['type'] == "Approver" and j['value'] == str(-1):
-                    filtered.append(i)
-                    break
-                if j['type'] == "Integrator" and j['value'] == str(1):
                     filtered.append(i)
                     break
         else:
@@ -230,23 +223,23 @@ def cherry_pick(user_id, project, ref):
         return True
 
 def push(topic):
+    os.system('git branch -D master_backup')
 
-    #new_branch_cmd = "git checkout -b sandbox_backup"
     new_branch_cmd = "git checkout -b master_backup"
     ret = os.system(new_branch_cmd)
     if ret:
-        print "Chckout new branch fails."
+        print "Checkout new branch fails."
         sys.exit(1)
 
-    #push_cmd = "git push origin HEAD:refs/for/master/%s" % topic
-    push_cmd = "git push origin HEAD:refs/for/sandbox/yocto_startup_1214/%s" % topic
+    push_cmd = "git push origin HEAD:refs/for/master/%s" % topic
     ret = os.system(push_cmd)
     if ret:
         print "Push patches to master branch fail."
+        sys.exit(1)
 
-def review_conflict_patches(user_id, successful_s, conflict_buffer):
+def review_conflict_patches(user_id, conflict_s, conflict_buffer):
     for key, value in conflict_buffer.iteritems():
-        for obj in conflict_buffer:
+        for obj in conflict_s:
             if obj.number == key:
                 review_cmd='ssh %s@icggerrit.ir.intel.com -p 29418 gerrit review %s --code-review -1' % (user_id, obj.revision)
                 if value:
@@ -261,15 +254,6 @@ def review_conflict_patches(user_id, successful_s, conflict_buffer):
                 ret = os.system(msg_cmd)
                 if ret:
                     print 'Give message comment fails'
-
-def parse_args():
-    parser = argparse.ArgumentParser(description='Patch collection and sorting')
-    parser.add_argument('-n', '--name', required=True, help='Username of gerrit')
-    parser.add_argument('-p', '--project', required=True, help='Project name')
-    parser.add_argument('-e', '--exclude', help='Number of patches to be excluded')
-    parser.add_argument('-P', '--priority', help='Priority of patches number to be boosted')
-
-    return parser.parse_args()
 
 def get_current_head():
     cmd = "git log --pretty=oneline  -1"
@@ -296,13 +280,6 @@ def find_first_deps(all_deps, current_head, topic):
         all_deps.remove(topic_patches_l[0])
 
     #Find first deps which include the first patch that depend on topic patches for current master
-    #if topic_patches_l:
-    #    for deps in all_deps:
-    #        if deps[0].parents[0] == topic_patches_l[0][-1].revision:
-    #            first_deps = deps
-    #            all_deps.remove(deps)
-    #            break
-    #else:
     for deps in all_deps:
         if deps[0].parents[0] == current_head:
             first_deps = deps
@@ -312,7 +289,7 @@ def find_first_deps(all_deps, current_head, topic):
     return first_deps, topic_patches_l, all_deps
 
 def autoreview(first, successful_s):
-    approvers = ['xiaozhou', 'yangliang']
+    approvers = ['liuxiaoz', 'lyang56']
 
     def review_action(patches_l):
         for patch in patches_l:
@@ -331,8 +308,18 @@ def autoreview(first, successful_s):
             if ret:
                 print "autoreview patch %s fails" % patch.number
 
-    review_action(first[0])
+    if first:
+        review_action(first[0])
     review_action(successful_s)
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Patch collection and sorting')
+    parser.add_argument('-n', '--name', required=True, help='Username of gerrit')
+    parser.add_argument('-p', '--project', required=True, help='Project name')
+    parser.add_argument('-e', '--exclude', help='Number of patches to be excluded')
+    parser.add_argument('-P', '--priority', help='Priority of patches number to be boosted')
+
+    return parser.parse_args()
 
 if __name__ == '__main__':
     topic = 'linux_camhal_preint'
@@ -349,12 +336,16 @@ if __name__ == '__main__':
 
     if patchObjs:
         valued_patches = check_value(patchObjs)
+        for patch in valued_patches:
+            print patch.number
+        if not valued_patches:
+            print "No patches need to be rebased..."
+            sys.exit(0)
 
     num_sorted_patches = small_bubble(valued_patches)
 
     all_deps = []
 
-    import ipdb;ipdb.set_trace()
     while len(num_sorted_patches) >= 1:
         all_deps, deps_list = find_parents(all_deps, num_sorted_patches, num_sorted_patches[0])
         for i in deps_list:
@@ -395,8 +386,7 @@ if __name__ == '__main__':
     push(topic)
 
     autoreview(first_deps, successful_set)
-
     if conflict_patches:
-        review_conflict_patches(args.name, successful_set, conflict_buffer)
+        review_conflict_patches(args.name, conflict_set, conflict_buffer)
 
     print ('Done')
