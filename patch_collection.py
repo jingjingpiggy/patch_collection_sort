@@ -2,6 +2,7 @@
 import os
 import sys
 import json
+import time
 import argparse
 import subprocess
 
@@ -25,9 +26,7 @@ class Patch(object):
 
 def get_patch_info(user_id, project):
     patches = []
-    query_cmd = 'ssh {user}@icggerrit.ir.intel.com -p 29418 gerrit query '\
-                'status:open project:{project} branch:master '\
-                '--current-patch-set --format=JSON approver=1'.format(user=user_id, project=project)
+    query_cmd = 'ssh {user}@icggerrit.ir.intel.com -p 29418 gerrit query status:open project:{project} branch:master --current-patch-set --format=JSON approver=1'.format(user=user_id, project=project)
 
     popen = subprocess.Popen(query_cmd, stdout=subprocess.PIPE, shell=True)
     for i in popen.stdout.readlines():
@@ -41,8 +40,7 @@ def get_patch_info(user_id, project):
         patches.append(patchobj)
 
     if len(patches) == 0:
-        print 'No NEW patches in %s project on master branch, or ssh request '\
-           'fails, please check.' % project
+        print 'No NEW patches in %s project on master branch, or ssh request fails, please check.' % project
         sys.exit(0)
 
     return patches
@@ -51,6 +49,7 @@ def check_value(approver_patches):
     filtered = []
 
     for i in approver_patches:
+        is_approval = False 
         if i.approvals:
             for j in i.approvals:
                 if j['type'] == "Code-Review" and j['value'] == str(-1):
@@ -59,8 +58,13 @@ def check_value(approver_patches):
                 if j['type'] == "Approver" and j['value'] == str(-1):
                     filtered.append(i)
                     break
+                if j['type'] == "Approver" and j['value'] == str(1):
+                    is_approval = True 
         else:
-            continue
+            filtered.append(i) 
+
+        if not is_approval:
+            filtered.append(i)
 
     for m in filtered:
         if m in approver_patches:
@@ -89,6 +93,11 @@ def find_parents(all_deps, patch_l, obj):
                 f = True
                 for j in deps_l:
                     i.append(j)
+            elif i[0].parents[0] == deps_l[-1].revision:
+                f = True
+                deps_l.reverse()
+                for j in deps_l:
+                    i.insert(0, j)
 
     if not f:
         all_deps.append(deps_l)
@@ -166,18 +175,14 @@ def check_out(user_id, project, topic_patches, first_deps):
 
     if topic_patches:
         print "Start to check out the topic patches %s." % topic_patches[0][-1].number
-        check_out_cmd = 'git fetch '\
-            'ssh://%s@icggerrit.ir.intel.com:29418/%s %s && git '\
-            'checkout FETCH_HEAD' % (user_id, project, topic_patches[0][-1].ref)
+        check_out_cmd = 'git fetch ssh://%s@icggerrit.ir.intel.com:29418/%s %s && git checkout FETCH_HEAD' % (user_id, project, topic_patches[0][-1].ref)
         ret = os.system(check_out_cmd)
         if ret:
             print "check out topic patches fail"
             sys.exit(1)
     elif first_deps:
         print "Start to check out the first patch %s of first dependent patch series." % first_deps[0].number
-        check_out_cmd = 'git fetch '\
-            'ssh://%s@icggerrit.ir.intel.com:29418/%s %s && git '\
-            'checkout FETCH_HEAD' % (user_id, project, first_deps[0].ref)
+        check_out_cmd = 'git fetch ssh://%s@icggerrit.ir.intel.com:29418/%s %s && git checkout FETCH_HEAD' % (user_id, project, first_deps[0].ref)
         ret = os.system(check_out_cmd)
         if ret:
             print "check out first patch fail"
@@ -192,9 +197,7 @@ def cherry_pick(user_id, project, ref):
     conflict_F = False
     unmerged_F = False
 
-    cherry_pick_cmd = 'git fetch '\
-            'ssh://{user}@icggerrit.ir.intel.com:29418/{project} {ref} && git '\
-            'cherry-pick -s FETCH_HEAD'.format(user=user_id, project=project, ref=ref)
+    cherry_pick_cmd = 'git fetch ssh://{user}@icggerrit.ir.intel.com:29418/{project} {ref} && git cherry-pick -s FETCH_HEAD'.format(user=user_id, project=project, ref=ref)
 
     print "Start to cherry pick the patch: %s\n" % ref.split('/')[-2]
 
@@ -221,7 +224,7 @@ def cherry_pick(user_id, project, ref):
     else:
         return True
 
-def push(topic):
+def push(topic, project):
 
     print "Delete master_backup branch"
     ret = os.system('git branch -D master_backup')
@@ -235,7 +238,8 @@ def push(topic):
         print "Checkout new master_backup branch fails."
         sys.exit(1)
 
-    push_cmd = "git push origin HEAD:refs/for/master/%s" % topic
+    push_cmd = "git push ssh://jinjingx@icggerrit.ir.intel.com:29418/%s HEAD:refs/for/master/%s" % (project, topic)
+    print "push_cmd: %s" % push_cmd
     ret = os.system(push_cmd)
     if ret:
         print "Push patches to master branch fail."
@@ -285,14 +289,25 @@ def find_first_deps(all_deps, current_head, topic):
     if topic_patches_l:
         all_deps.remove(topic_patches_l[0])
 
-    #Find first deps which include the first patch that depend on the current master
-    for deps in all_deps:
-        if deps[0].parents[0] == current_head:
-            first_deps = deps
-            all_deps.remove(deps)
-            break
+    else:
+        #Find first deps which include the first patch that depend on the current master
+        for deps in all_deps:
+            if deps[0].parents[0] == current_head:
+                first_deps = deps
+                all_deps.remove(deps)
+                break
 
     return first_deps, topic_patches_l, all_deps
+
+def get_current_revision(number):
+    cmd = "ssh -p 29418 icggerrit.ir.intel.com gerrit query --current-patch-set --format=JSON %s" % number
+    pipe = os.popen(cmd)
+    jsonStr = pipe.readlines()
+    pipe.close()
+
+    jsonData = json.loads(jsonStr[0])
+    revision = jsonData.get("currentPatchSet").get("revision")
+    return revision
 
 def autoreview(first, successful_s):
     approvers = ['liuxiaoz', 'lyang56']
@@ -307,16 +322,17 @@ def autoreview(first, successful_s):
                     else:
                         pass
 
-            autoreview_cmd = 'ssh %s@icggerrit.ir.intel.com -p 29418 gerrit review %s '\
-                '--code-review +1 --approver +1' % (approvers[id_index], patch.revision)
+            # Because after push function, revision on gerrit has been changed, which isnot the one queried by get_patch_info function 
+            revision = get_current_revision(patch.number)
+            print "revision: %s" % revision
+            autoreview_cmd = 'ssh %s@icggerrit.ir.intel.com -p 29418 gerrit review %s --code-review +1 --approver +1' % (approvers[id_index], revision)
 
+            print "autoreview_cmd: %s" % autoreview_cmd
             print "Give code review +1 and approver +1 onto gerrit for patch %s" % patch.number 
             ret = os.system(autoreview_cmd)
             if ret:
                 print "Autoreview patch %s fails" % patch.number
 
-#if first:
-#review_action(first[0])
     review_action(first)
     review_action(successful_s)
 
@@ -340,7 +356,7 @@ if __name__ == '__main__':
 
     current_head = get_current_head()
 
-    print "===Wrapper patch objects.==="
+    print "===Wrap patch objects.==="
     patchObjs = get_patch_info(args.name, args.project)
 
     if patchObjs:
@@ -377,6 +393,16 @@ if __name__ == '__main__':
         print "No patches need to be rebased..."
         sys.exit(0)
 
+    print "===Delete maser branch==="
+    ret = os.system('git branch -D master')
+    if ret:
+        print "Delete master branch fails."
+
+    print "===Checkout to master branch==="
+    ret = os.system('git checkout -b master')
+    if ret:
+        print "Checkout to master branch fails."
+
     print "===Start to checkout and cherrypick.==="
     check_out(args.name, args.project, topic_patches, first_deps)
 
@@ -385,6 +411,7 @@ if __name__ == '__main__':
     conflict_buffer = {}
     for index, value in enumerate(all_deps):
         for i in value:
+            print 'All patches: ' + i.ref
             if not cherry_pick(args.name, args.project, i.ref):
                 conflict_set.add(i)
                 patch_num = find_patch(first_deps, topic_patches, all_deps)
@@ -400,14 +427,15 @@ if __name__ == '__main__':
             else:
                 successful_set.add(i)
 
-#print "===Push local patch series to gerrit.==="
-#push(topic)
+    print "===Push local patch series to gerrit.==="
+    push(topic, args.project)
 
-#    print "===Autoreview for patch series.==="
-#    autoreview(first_deps, successful_set)
+    time.sleep(5)
+    print "===Autoreview for patch series.==="
+    autoreview(first_deps, successful_set)
 
-#    print "===Autoreview for conflict patches.==="
-#    if conflict_patches:
-#        review_conflict_patches(args.name, conflict_set, conflict_buffer)
+    if conflict_set:
+        print "===Autoreview for conflict patches.==="
+        review_conflict_patches(args.name, conflict_set, conflict_buffer)
 
     print ('Done')
