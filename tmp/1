@@ -1,0 +1,124 @@
+#!/usr/bin/python
+import os
+import linecache
+import subprocess
+import tempfile
+
+def get_patch_info_from_gerrit(name, projectName):
+
+    def dump_patch_info(output, suffix='', prefix='tmp', dirn=None):
+        tmpfile = tempfile.mkstemp(suffix, prefix, dirn)
+        print tmpfile
+        with open(tmpfile[1], 'w') as fobj:
+            fobj.write(output)
+
+        return tmpfile[1]
+
+    gerritobj = '%s@icggerrit.ir.intel.com' % name
+    project = 'project:%s' % projectName
+    cmd = ['ssh', '-p', '29418', 'gerrit', 'query','status:NEW',
+           'branch:sandbox/yocto_startup_1214', '--all-approvals']
+    cmd.insert(1, gerritobj)
+    cmd.insert(6, project)
+
+    popen = subprocess.Popen(subprocess.list2cmdline(cmd),
+            stdout=subprocess.PIPE, shell=True)
+
+    output = popen.communicate()[0]
+    if popen.returncode:
+        raise
+
+    dump_patch_info(output)
+
+def parse_approvals(tmpfile, num1, num2):
+    approvals = []
+    approvals_cmd = ["awk", '/approvals:/{print NR}']
+    approvals_cmd.append(tmpfile)
+
+    approvals_linenum = subprocess.check_output(approvals_cmd)
+    approvals_linenum = approvals_linenum.splitlines()
+
+    def func(approvals_list):
+        approval = {}
+        for n in approvals_list:
+            if n.find("type") != -1:
+                approval[n.split(':')[0]] = n.split(':')[1].lstrip()
+            if n.find("value") != -1:
+                approval[n.split(':')[0]] = n.split(':')[1].lstrip()
+        return approval
+
+    for m in approvals_linenum:
+        with open(tmpfile, 'r') as fd3:
+            if int(m) > int(num1) and int(m) < int(num2):
+                if  m != approvals_linenum[-1]:
+                    approvals_list = [line.strip() for line in fd3.readlines()[int(m): int(approvals_linenum[approvals_linenum.index(m)+1])]]
+                else:
+                    approvals_list = [line.strip() for line in fd3.readlines()[int(m): int(num)]]
+                approvals.append(func(approvals_list))
+    return approvals
+
+def parse_patchsets(tmpfile, num1, num2):
+    patchSets = {}
+
+    patchSets_cmd = ["awk", '/patchSets:/{print NR}']
+    patchSets_cmd.append(tmpfile)
+    patchSets_linenum = subprocess.check_output(patchSets_cmd)
+    patchSets_linenum = patchSets_linenum.splitlines()
+
+    for x in patchSets_linenum:
+        with open(tmpfile, 'r') as fd2:
+            if int(x) > int(num2):
+                patchSet_list = [line.strip() for line in fd2.readlines()[int(patchSets_linenum[patchSets_linenum.index(x)-1]):int(num2)]]
+                for y in patchSet_list:
+                    if y.find('number') != -1:
+                        patchSets[y.split(':')[0]] = y.split(':')[1].lstrip()
+                    if y.find("revision") != -1:
+                        patchSets[y.split(':')[0]] = y.split(':')[1].lstrip()
+                    if y.find("parents") != -1 and patchSet_list[patchSet_list.index(y)+1].find("refs") == -1:
+                        patchSets[y.split(':')[0]] = patchSet_list[patchSet_list.index(y)+1]
+                    if y.find("refs") != -1:
+                        patchSets[y.split(':')[0]] = y.split(':')[1].lstrip()
+                    if y.find("approvals:") != -1:
+                        import ipdb;ipdb.set_trace()
+                        patchSets[y.split(':')[0]] = parse_approvals(tmpfile, num1, num2)
+                        return patchSets
+
+
+def parse_log(tmpfile):
+    patches = {}
+
+    change_cmd = ["awk", '/change /{print NR}']
+
+    change_cmd.append(tmpfile)
+
+    change_linenum = subprocess.check_output(change_cmd)
+    change_linenum = change_linenum.splitlines()
+    num = len(change_linenum)
+
+    with open(tmpfile, 'r') as fd:
+        for i in range(0, num):
+            change_line = linecache.getline(tmpfile, int(change_linenum[i]))
+            patches[change_line.split(' ')[0]] = change_line.split(' ')[1]
+            patchlist = [line.strip() for line in fd.readlines()[int(change_linenum[i]):int(change_linenum[i+1])]]
+            for j in patchlist:
+                if j.find("project") != -1:
+                    patches[j.split(':')[0]] = j.split(':')[1].lstrip()
+                if j.find("branch") != -1:
+                    patches[j.split(':')[0]] = j.split(':')[1].lstrip()
+                if j.find("id") != -1:
+                    patches[j.split(':')[0]] = j.split(':')[1].lstrip()
+                if j.find("number:") != -1:
+                    patches[j.split(':')[0]] = j.split(':')[1].lstrip()
+                if j.find("url") != -1:
+                    patches[j.split(':')[0]] = j.split(':')[1:].lstrip()
+                if j.find("status") != -1:
+                    patches[j.split(':')[0]] = j.split(':')[1].lstrip()
+                if j.find("patchSet") != -1:
+                    import ipdb;ipdb.set_trace()
+                    patches[j.split(':')[0]] = parse_patchsets(tmpfile, change_linenum[i], change_linenum[i+1])
+    return patches
+
+if __name__ == '__main__':
+    #get_patch_info_from_gerrit('jinjingx', 'vied-viedandr-libcamhal')
+    parse_log("/tmp/tmp1")
+

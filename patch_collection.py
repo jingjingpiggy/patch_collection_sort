@@ -224,7 +224,7 @@ def cherry_pick(user_id, project, ref):
     else:
         return True
 
-def push(topic, project):
+def push(name, project, topic):
 
     print "Delete master_backup branch"
     ret = os.system('git branch -D master_backup')
@@ -236,14 +236,12 @@ def push(topic, project):
     ret = os.system("git checkout -b master_backup")
     if ret:
         print "Checkout new master_backup branch fails."
-        sys.exit(1)
 
-    push_cmd = "git push ssh://jinjingx@icggerrit.ir.intel.com:29418/%s HEAD:refs/for/master/%s" % (project, topic)
+    push_cmd = "git push ssh://%s@icggerrit.ir.intel.com:29418/%s HEAD:refs/for/master/%s" % (name, project, topic)
     print "push_cmd: %s" % push_cmd
     ret = os.system(push_cmd)
     if ret:
         print "Push patches to master branch fail."
-        sys.exit(1)
 
 def review_conflict_patches(user_id, conflict_s, conflict_buffer):
     for key, value in conflict_buffer.iteritems():
@@ -367,7 +365,7 @@ if __name__ == '__main__':
             print "No patches need to be rebased..."
             sys.exit(0)
 
-    print "===Sort the patches according to patch number.===" 
+    print "===Sort the patches according to patch number.==="
     num_sorted_patches = small_bubble(valued_patches)
 
     print "===Resolve dependencies.==="
@@ -428,7 +426,7 @@ if __name__ == '__main__':
                 successful_set.add(i)
 
     print "===Push local patch series to gerrit.==="
-    push(topic, args.project)
+    push(args.name, args.project, topic)
 
     time.sleep(5)
     print "===Autoreview for patch series.==="
