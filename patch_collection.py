@@ -95,8 +95,8 @@ def find_parents(all_deps, patch_l, obj):
             deps_l.append(obj)
 
     # all_deps = [[], [], []]
-    # all_deps[n]-> deps_l    [[],[,deps_l],[]]
-    # deps_l <- all_deps[n]   [[], [deps_l, []], []]
+    # all_deps[n]-> deps_l    [[],[...,deps_l],[]]
+    # deps_l <- all_deps[n]   [[], [deps_l,...], []]
     if all_deps:
         for i in all_deps:
             if i[-1].revision == deps_l[0].parents[0]:
@@ -125,7 +125,7 @@ def small_bubble(f_list):
 
 def find_deps_l(all_deps, num):
     """
-    Find patches series from all_deps
+    Find patches cluster from all_deps
     @param all_deps: [[], [],...]
     @return: deps:[], index of deps in all_deps
     """
@@ -135,8 +135,8 @@ def find_deps_l(all_deps, num):
                 return deps, all_deps.index(deps)
     return None, None
 
-def find_patch(first_deps, topic_patches, all_deps):
-    """Find patch obj from first_deps, topic_patches and all_deps"""
+def find_patch(first_deps, topic_deps, all_deps):
+    """Find patch obj from first_deps, topic_deps and all_deps"""
 
     current_head = get_current_head()
     patch_num = []
@@ -157,8 +157,8 @@ def find_patch(first_deps, topic_patches, all_deps):
 
     if first_deps:
         find(first_deps)
-    if topic_patches:
-        find(topic_patches)
+    if topic_deps:
+        find(topic_deps)
     if all_deps:
         find(all_deps)
 
@@ -171,7 +171,7 @@ def exclude_patches(all_deps, exclude_nums):
     """
     Exclude patch from all_deps according to patch num.
     all_deps: [[a,b],[c,d,e],[f,j]]
-    Result: [[c,d,e],[f,j]] or [[b],[c,d,e],[f,j]]
+    Result: [[c,d,e],[f,j]] or [[a,b],[c],[f,j]]
     """
     for num in exclude_nums:
         deps_l, deps_l_index = find_deps_l(all_deps, num)
@@ -189,8 +189,9 @@ def exclude_patches(all_deps, exclude_nums):
     return all_deps
 
 def boost_priority(all_deps, num1, num2):
-    """Boost patch priority in all_deps,
-    then cherry pick(out) order will be changed"""
+    """
+    Boost patch priority in all_deps,then order of cherry pick(out) will be changed
+    """
 
     deps_1l, deps_1l_index = find_deps_l(all_deps, num1)
     deps_2l, deps_2l_index = find_deps_l(all_deps, num2)
@@ -227,36 +228,36 @@ def cherry_and_collect(args, deps, successful_s, conflict_s):
             successful_s.add(i)
     return successful_s, conflict_s
 
-def pull_patches(args, topic_patches, first_deps, current_head, successful_s, conflict_s):
+def pull_patches(args, topic_deps, first_deps, current_head, successful_s, conflict_s):
     """
     Cherry out(pick) patches from gerrit to local.
-    1) topic_patches: based on master---[[check out], [cherry pick]]
+    1) topic_deps: based on master---[[check out], [cherry pick]]
                       not based on master --- [[cherry pick],[cherry pick]...]
                       collect result
     2) first_deps: [check out, cherry pick....]
     """
 
-    if topic_patches:
-        if topic_patches[0][0].parents[0] == current_head:
-            print "Start to check out the topic patches %s." % topic_patches[0][-1].number
-            check_out_cmd = 'git fetch ssh://%s@icggerrit.corp.intel.com:29418/%s %s && git checkout FETCH_HEAD' % (args.name, args.project, topic_patches[0][-1].ref)
+    if topic_deps:
+        if topic_deps[0][0].parents[0] == current_head:
+            print "Start to check out the topic patches %s." % topic_deps[0][-1].number
+            check_out_cmd = 'git fetch ssh://%s@icggerrit.corp.intel.com:29418/%s %s && git checkout FETCH_HEAD' % (args.name, args.project, topic_deps[0][-1].ref)
             ret = os.system(check_out_cmd)
             if ret:
                 print "check out topic patches fail"
             else:
-                for patch in topic_patches[0]:
+                for patch in topic_deps[0]:
                     successful_s.add(patch)
         else:
-            for topics in topic_patches:
+            for topics in topic_deps:
                 successful_s, conflict_s = cherry_and_collect(args, topics, successful_s, conflict_s)
 
-        if topic_patches[1:]:
-            for other in topic_patches[1:]:
+        if topic_deps[1:]:
+            for other in topic_deps[1:]:
                 successful_s, conflict_s = cherry_and_collect(args, other, successful_s, conflict_s)
 
-    #Only the useful for script running for the first time
+    #Only useful for script first running
     elif first_deps:
-        print "Start to check out the first patch %s of first dependent patch series." % first_deps[0].number
+        print "Start to check out the first patch %s of first dependent patch cluster." % first_deps[0].number
         check_out_cmd = 'git fetch ssh://%s@icggerrit.corp.intel.com:29418/%s %s && git checkout FETCH_HEAD' % (args.name, args.project, first_deps[0].ref)
         ret = os.system(check_out_cmd)
         if ret:
@@ -265,7 +266,7 @@ def pull_patches(args, topic_patches, first_deps, current_head, successful_s, co
             successful_s.add(first_deps[0])
 
         if first_deps[1:]:
-            print "Start to cherry other patches of first dependent patch series."
+            print "Start to cherry other patches of first dependent patch cluster."
             successful_s, conflict_s = cherry_and_collect(args, first_deps[1:], successful_s, conflict_s)
 
     return successful_s, conflict_s
@@ -287,7 +288,7 @@ def cherry_pick(user_id, project, ref):
     if output[1].find('unmerged files') != -1:
         unmerged_F = True
 
-    #Currently, exit in two circumstance
+    #Currently, exit in two circumstances
     if popen.returncode:
         print output[1]
         if conflict_F:
@@ -303,7 +304,7 @@ def cherry_pick(user_id, project, ref):
         return True
 
 def push(name, project, topic):
-    """Push local patche in series to gerrit with topic name"""
+    """Push local patche in cluster to gerrit with topic name"""
 
     print "Delete master_backup branch"
     ret = os.system('git branch -D master_backup')
@@ -327,7 +328,8 @@ def push(name, project, topic):
 def review_conflict_patches(user_id, conflict_s, conflict_buf):
     """
     Review confilct patches with comment and code-review -1,
-    the head conflict with is current series head"""
+
+    """
 
     for key, value in conflict_buf.iteritems():
         for obj in conflict_s:
@@ -357,20 +359,21 @@ def get_current_head():
 def find_first_and_topic_deps(all_deps, current_head, topic):
     """
     Find first and topic patch deps from all_deps
-    all_deps -> first:[] + topic:[] + rest[]"""
+    all_deps -> first:[] + topic:[] + rest[]
+    """
 
     first_deps = []
-    topic_patches_l = []
+    topic_deps_l = []
 
     for deps in all_deps:
         for patch in deps:
             if patch.topic == topic:
-                topic_patches_l.append(deps)
+                topic_deps_l.append(deps)
                 break
 
     #Remove topic patches from all_deps
-    if topic_patches_l:
-        for topic in topic_patches_l:
+    if topic_deps_l:
+        for topic in topic_deps_l:
             all_deps.remove(topic)
 
     else:
@@ -381,7 +384,7 @@ def find_first_and_topic_deps(all_deps, current_head, topic):
                 all_deps.remove(deps)
                 break
 
-    return first_deps, topic_patches_l, all_deps
+    return first_deps, topic_deps_l, all_deps
 
 def get_current_revision(number):
     cmd = "ssh -p 29418 icggerrit.corp.intel.com gerrit query --current-patch-set --format=JSON %s" % number
@@ -444,7 +447,7 @@ if __name__ == '__main__':
 
     current_head = get_current_head()
 
-    print "===Wrap patch objects.==="
+    print "**Wrap patch objects.**"
     patchObjs = get_patch_info(args.name, args.project)
 
     if patchObjs:
@@ -455,10 +458,10 @@ if __name__ == '__main__':
             print "No patches need to be rebased..."
             sys.exit(0)
 
-    print "===Sort the patches according to patch number.==="
+    print "**Sort the patches according to patch number.**"
     num_sorted_patches = small_bubble(valued_patches)
 
-    print "===Resolve dependencies of patches.==="
+    print "**Resolve dependencies of patches.**"
     all_deps = []
 
     while len(num_sorted_patches) >= 1:
@@ -474,16 +477,16 @@ if __name__ == '__main__':
         pri_list = args.priority.split(',')
         all_deps = boost_priority(all_deps, pri_list[0], pri_list[1])
 
-    print "===Find first(depend on master patches) or topic patches.==="
-    first_deps, topic_patches, all_deps = find_first_and_topic_deps(all_deps, current_head, topic)
+    print "**Find first(depend on master patches) or topic patches.**"
+    first_deps, topic_deps, all_deps = find_first_and_topic_deps(all_deps, current_head, topic)
 
     #Avoid of being on other branches(should on master branch)
-    print "===Delete maser branch==="
+    print "**Delete maser branch**"
     ret = os.system('git branch -D master')
     if ret:
         print "Delete master branch fails."
 
-    print "===Checkout to master branch==="
+    print "**Checkout to master branch**"
     ret = os.system('git checkout -b master')
     if ret:
         print "Checkout to master branch fails."
@@ -491,24 +494,25 @@ if __name__ == '__main__':
     #Patch the patches(from gerrit) locally
     successful_s = set()
     conflict_s = set()
-    print "===Start to checkout and cherry pick topic or first patches.==="
-    successful_s, conflict_s = pull_patches(args, topic_patches, first_deps, current_head, successful_s, conflict_s)
+    print "**Start to checkout and cherry pick topic or first patches.**"
+    successful_s, conflict_s = pull_patches(args, topic_deps, first_deps, current_head, successful_s, conflict_s)
 
     for deps in all_deps:
         successful_s, conflict_s = cherry_and_collect(args, deps, successful_s, conflict_s)
 
-    print "===Push local patch series to gerrit.==="
+    import ipdb;ipdb.set_trace()
+    print "**Push local patch cluster to gerrit.**"
     push_result = push(args.name, args.project, topic)
 
     if push_result:
         time.sleep(5)
-        print "===Autoreview for pushed patch series on gerrit .==="
+        print "**Autoreview for pushed cluster patch on gerrit .**"
         autoreview(first_deps, successful_s)
 
         if conflict_s:
             conflict_buf = {}
-            print "===Autoreview for conflict patches on gerrit.==="
-            patch_num = find_patch(first_deps, topic_patches, all_deps)
+            print "**Autoreview for conflict patches on gerrit.**"
+            patch_num = find_patch(first_deps, topic_deps, all_deps)
             if patch_num:
                 conflict_buf[i.number] = patch_num
             else:
