@@ -1,35 +1,35 @@
-The script is for patch rebasing automatically:
+Rebase patch automatically:
 collect patch from gerrit, make them in one dependency cluster with "topic" key word then push onto gerrit.
 
 The aim of the script is facilitate testing work, by checking out the "HEAD" patch, then all are patched locally.
 
-The satisfied conditions of patches are no code-review -1 && approver +1, of course that approver +1 is based on three code-review +1.
+The satisfied conditions of patches are no code-review -1 && approver +1, of course approver +1 is based on three code-review +1.
 
 First, all patches will be sorted by "number"(small bubble), create dependency list by "parent", all_deps: [[], [], []...]
 
 Second, divid all_deps into three parts, they are first_deps, topic_deps and rest_all_deps.
-first_deps: patch cluster, which depend on current head, but without "topic". suitable for script first running. 
+first_deps: patch cluster, which depend on current head, but without "topic". only happen on first running. 
 topic_deps: patch cluster, which has "topic" key word, [[]] or [[topic],[with topic|without topic],...]
-rest_all_deps: patch cluster, other patches with satisfied conditions, without "topic" key word. Need to make them into "topic" cluster.
+rest_all_deps: patch cluster, other patches with satisfied conditions, without "topic" key word. Need to add them into "topic" cluster.
 
-Third: patch the patches locally by check out or cherry pick. For first_deps: checkout the first patch, then cherry pick others one by one.
+Third: patch the patches locally by check out or cherry pick.
+For first_deps: checkout the first patch, then cherry pick others one by one.
 For topic_deps: If first cluster is based on current master, checkout the first one, cherry pick other clusters one by one.
                 If first cluster isn't based on current master, cherry pick others.
 For rest_all_deps: cherry pick all patches one by one.
 
-Forth: after patching all patches locally well, ignore conflictive patches.
+Forth: Push onto gerrit after patching all patches locally well, conflictive patches will be ignored.
        Collect successful and conflictive ones.
-       Push onto gerrit. 
        Give code-review+1 and approver+1 to new set of successful patch on gerrit 
        Give comment and code-review-1 to conflictive ones. 
 
 Other features: change boost priority for patch deps.
                 remove some patches.
 
-The reason why not cherry pick all patch to local is that if cherry pick from gerrit the revision will change, but no other info chages (such as parent, commit id).
+The reason of not cherry pick all patch to local is that if cherry pick from gerrit the revision will change, but no other changes (such as parent, commit id).
 Then git will push all patches again but fail, even though there are new patches;
 
-But if check out from gerrit, patch info will change,git only push new patches with "topic" key word(such as which changed parent).
+But if check out from gerrit, patch info won't  change, git only push new patches with "topic" key word(such as parent change ).
 (I don't like such checking of gerrit:( )
 
 Jenkins,script once per hour.

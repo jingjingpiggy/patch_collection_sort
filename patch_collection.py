@@ -500,7 +500,6 @@ if __name__ == '__main__':
     for deps in all_deps:
         successful_s, conflict_s = cherry_and_collect(args, deps, successful_s, conflict_s)
 
-    import ipdb;ipdb.set_trace()
     print "**Push local patch cluster to gerrit.**"
     push_result = push(args.name, args.project, topic)
 
